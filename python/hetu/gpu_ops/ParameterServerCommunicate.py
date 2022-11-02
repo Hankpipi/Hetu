@@ -135,12 +135,12 @@ class ParameterServerCommunicateOp(Op):
         self.on_gpu = ndarray.is_gpu_ctx(self.ctx)
         self.on_cpu = not self.on_gpu
 
-        if self.parameter.is_embed and self.on_gpu:
-            self.on_cpu = True
-            self.on_gpu = False
-            self.ctx = cpu()
-            self.inputs[0] = self.add_transfer_op(
-                self.inputs[0], self.ctx, config.h2d_ops, config.d2h_ops)
+        # if self.parameter.is_embed and self.on_gpu:
+        #     self.on_cpu = True
+        #     self.on_gpu = False
+        #     self.ctx = cpu()
+        #     self.inputs[0] = self.add_transfer_op(
+        #         self.inputs[0], self.ctx, config.h2d_ops, config.d2h_ops)
 
         if self.on_gpu and self.inputs[0].event is None:
             self.inputs[0].event = stream.create_event_handle(self.ctx)
@@ -218,10 +218,10 @@ class ParameterServerCommunicateOp(Op):
             self._pull = self._pull_sparse
             self._push_pull = self._push_pull_sparse_cpu
         elif self.parameter.is_embed:
-            self._mult_lr = self._mult_lr_sparse_cpu
-            self._push = self._push_sparse_cpu
+            self._mult_lr = self._mult_lr_dense_gpu
+            self._push = self._push_dense_gpu
             self._pull = self._pull_dense
-            self._push_pull = self._push_pull_halfsparse_cpu
+            self._push_pull = self._push_pull_dense_gpu
         elif self.on_cpu:
             self._mult_lr = self._mult_lr_dense_cpu
             self._push = self._push_dense_cpu

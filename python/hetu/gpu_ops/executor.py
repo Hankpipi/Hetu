@@ -821,11 +821,15 @@ class SubExecutor(object):
             if shape is None:
                 self.node_to_arr_map[node] = None
                 return
-            if isinstance(node, (EmbeddingLookUp_Gradient, DataD2HSparseOp, DataH2DSparseOp, SparseSumOp)):
+            if isinstance(node, (DataD2HSparseOp, DataH2DSparseOp, SparseSumOp)):
                 if not self.from_memory_pool((shape, 'IndexedSlices'), node, node.ctx):
                     self.node_to_arr_map[node] = ndarray.IndexedSlices(
                         dense_shape=shape)
                 return
+            if isinstance(node, EmbeddingLookUp_Gradient):
+                if not self.from_memory_pool(shape, node, node.ctx):
+                    self.node_to_arr_map[node] = ndarray.empty(shape=shape, ctx=node.ctx)
+                return            
             if isinstance(node, EmbeddingLookUp) and (self.use_sparse_pull or self.cstable_policy) and self.config.prefetch:
                 self.node_to_arr_map[node] = self.param_psval_map[node.inputs[0]]
                 return
@@ -1175,7 +1179,7 @@ def gradients(output_node, node_list, insert_grad=None, return_all=False):
                 node_to_output_grads_list[node], node_to_output_grads_list[node][0].raw_ctx, sparse=False)
         elif isinstance(node, PlaceholderOp) and node.is_embed:
             output_grad = sum_node_list(
-                node_to_output_grads_list[node], node.raw_ctx, sparse=True)
+                node_to_output_grads_list[node], node.raw_ctx, sparse=False)
         else:
             output_grad = sum_node_list(
                 node_to_output_grads_list[node], node.raw_ctx, sparse=False)
@@ -1240,7 +1244,7 @@ def topo_sort_register_ps(node_list, ps_comm, comm_mode, seed, cstable_policy):
             return
         visited.add(node)
         if isinstance(node, PlaceholderOp) and node.trainable and (comm_mode == "PS" or node.is_embed):
-            node_type = int(node.is_embed)
+            node_type = 0
             if node_type and cstable_policy is not None:
                 node_type = 2
             node.initializer.init_on_ps(

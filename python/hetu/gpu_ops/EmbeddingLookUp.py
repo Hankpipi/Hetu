@@ -4,7 +4,7 @@ from .. import ndarray
 from .._base import DNNL_LIB
 import numpy as np
 from ..cpu_links import embedding_lookup as cpu_embedding_lookup
-from ..gpu_links import embedding_lookup
+from ..gpu_links import embedding_lookup, indexedslice_oneside_add
 
 
 class EmbeddingLookUp(Op):
@@ -78,11 +78,11 @@ class EmbeddingLookUp(Op):
         local_comm_mode = config.node_strategy.get(self, config.comm_mode)
         assert local_comm_mode == config.node_strategy.get(self.inputs[0], config.comm_mode), \
             'Embedding lookup communication mode invalid. Should conform with embedding parameter.'
-        if local_comm_mode in ('PS', 'Hybrid'):
-            cpu_ctx = ndarray.cpu(0)
-            self.ctx = cpu_ctx
-            for n in self.inputs:
-                n.ctx = cpu_ctx
+        # if local_comm_mode in ('PS', 'Hybrid'):
+        #     cpu_ctx = ndarray.cpu(0)
+        #     self.ctx = cpu_ctx
+        #     for n in self.inputs:
+        #         n.ctx = cpu_ctx
 
 
 class EmbeddingLookUp_Gradient(Op):
@@ -92,8 +92,10 @@ class EmbeddingLookUp_Gradient(Op):
 
     def compute(self, input_vals, output_val, stream_handle=None):
         assert self.embed_shape
-        output_val.update(
+        slices = ndarray.IndexedSlices(dense_shape=self.embed_shape)
+        slices.update(
             values=input_vals[0], indices=input_vals[1], dense_shape=self.embed_shape)
+        indexedslice_oneside_add(slices, output_val)
 
     def gradient(self, output_grad):
         raise NotImplementedError
@@ -104,8 +106,9 @@ class EmbeddingLookUp_Gradient(Op):
 
     def backward_hook(self, config):
         # insert data transfer op if needed
-        if config.comm_mode == 'PS' or config.comm_mode == "Hybrid":
-            self.ctx = ndarray.cpu(0)
+        # if config.comm_mode == 'PS' or config.comm_mode == "Hybrid":
+        #     self.ctx = ndarray.cpu(0)
+        pass
 
 
 def embedding_lookup_op(embedding, index, ctx=None):

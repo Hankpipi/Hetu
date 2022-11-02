@@ -133,7 +133,7 @@ class SumOp(Op):
         self.middle_results = [None for _ in self.inputs]
         self.need_deduce = [False for _ in self.inputs]
         for ind, node in enumerate(self.inputs):
-            if isinstance(node, (EmbeddingLookUp_Gradient, DataD2HSparseOp, DataH2DSparseOp)):
+            if isinstance(node, (DataD2HSparseOp, DataH2DSparseOp)):
                 self.callbacks[ind] = self._indexed_cpu_callback if self.on_cpu else self._indexed_gpu_callback
             elif self.on_cpu:
                 self.callbacks[ind] = self._simple_cpu_callback
