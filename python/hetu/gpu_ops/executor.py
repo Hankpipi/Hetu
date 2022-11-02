@@ -989,7 +989,7 @@ class SubExecutor(object):
             self.node_ref_cnt[node] = None
             key = self.node_to_shape_map[node]
             if key is not None:
-                if isinstance(node, (EmbeddingLookUp_Gradient, DataD2HSparseOp, DataH2DSparseOp, SparseSumOp)):
+                if isinstance(node, (DataD2HSparseOp, DataH2DSparseOp, SparseSumOp)):
                     key = (key, 'IndexedSlices')
                 self.to_memory_pool(key, node, node.ctx)
             else:

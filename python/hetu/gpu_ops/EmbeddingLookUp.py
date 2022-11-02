@@ -95,7 +95,7 @@ class EmbeddingLookUp_Gradient(Op):
         slices = ndarray.IndexedSlices(dense_shape=self.embed_shape)
         slices.update(
             values=input_vals[0], indices=input_vals[1], dense_shape=self.embed_shape)
-        indexedslice_oneside_add(slices, output_val)
+        indexedslice_oneside_add(slices, output_val, stream_handle)
 
     def gradient(self, output_grad):
         raise NotImplementedError
