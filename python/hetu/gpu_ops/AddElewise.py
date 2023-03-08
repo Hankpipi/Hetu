@@ -123,7 +123,7 @@ class AddOp(Op):
             strides = list(input_val1.stride) + \
                 list(input_val2.stride) + list(output_val.stride)
             self.gpu_buffer = ndarray.array(
-                strides, self.ctx, data_type=np.uintc)
+                strides, ctx=self.ctx, data_type=np.uintc)
             self.check_reset = False
 
     def gradient(self, output_grad):

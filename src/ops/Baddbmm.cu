@@ -34,10 +34,13 @@ int DLGpuBaddbmm(const DLArrayHandle input, const DLArrayHandle matA,
     cudaMemcpy((void *)output_data, (void *)input_data, size * sizeof(float),
                cudaMemcpyDeviceToDevice);
 
-    cublasStatus_t res = cublasSgemmStridedBatched(
+    cudaDataType_t data_type = CUDA_R_32F;
+    cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    cublasStatus_t res = cublasGemmStridedBatchedEx(
         cublas_map[dev_id], CUBLAS_OP_N, CUBLAS_OP_N, m, n, k, &alpha,
-        (const float *)matB->data, m, strideB, (const float *)matA->data, k,
-        strideA, &beta, (float *)matC->data, m, strideC, batchCount);
+        (const float *)matB->data, data_type, m, strideB,
+        (const float *)matA->data, data_type, k, strideA, &beta,
+        (float *)matC->data, data_type, m, strideC, batchCount, data_type, algo);
     assert(res == CUBLAS_STATUS_SUCCESS);
     return 0;
 }

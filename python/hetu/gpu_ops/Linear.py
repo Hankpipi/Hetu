@@ -74,19 +74,20 @@ class LinearOp(Op):
 
     def infer_shape(self, input_shapes):
         assert len(input_shapes) == 3
-        assert all([len(shape) == 2 for shape in input_shapes[:2]])
+        assert len(input_shapes[1]) == 2
         assert len(input_shapes[2]) == 1
         A = input_shapes[0]
         B = input_shapes[1]
         bias_shape = input_shapes[2]
-        shape_A = A[0]
-        shape_B = B[1]
+        shape_A = A[:-1]
+        shape_B = (B[1], )
         if self.matmul_attr_trans_A == True:
-            shape_A = A[1]
+            assert(len(input_shapes[0]) == 2)
+            shape_A = (A[1], )
         if self.matmul_attr_trans_B == True:
-            shape_B = B[0]
-        assert bias_shape == (shape_B,)
-        return (shape_A, shape_B)
+            shape_B = (B[0], )
+        assert bias_shape == shape_B
+        return shape_A + shape_B
 
 
 def linear_op(node_A, node_B, bias, trans_A=False, trans_B=False, ctx=None):

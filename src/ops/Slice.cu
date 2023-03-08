@@ -258,8 +258,11 @@ __global__ void slice_gradient_kernel_simple(float *out_arr,
         tmp_index /= o_shape[i];
         i_index += (offset - begin_pos[i]) * i_mat;
         i_mat *= i_shape[i];
+        printf("o_index, i_shape[%d]: %u\n", o_index, i, i_shape[i]);
     }
+    printf("before: %u %u\n", o_index, i_index);
     out_arr[o_index] = in_arr[i_index];
+    printf("after: %u %u\n", o_index, i_index);
 }
 
 int DLGpuSliceGradientSimple(const DLArrayHandle in_arr, DLArrayHandle out_arr,

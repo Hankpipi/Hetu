@@ -27,3 +27,16 @@ class LayerNorm(BaseLayer):
 
     def __call__(self, x):
         return ht.layer_normalization_op(x, self.scale_var, self.bias_var, eps=self.eps)
+
+class GroupNorm(BaseLayer):
+    def __init__(self, num_channels, name='groupnorm', eps=1e-05):
+        self.num_channels = num_channels
+        self.name = name
+        self.eps = eps
+        self.scale_var = ht.init.ones(
+            shape=(self.num_channels, ), name=self.name+'_weight')
+        self.bias_var = ht.init.zeros(
+            shape=(self.num_channels, ), name=self.name+'_bias')
+
+    def __call__(self, x):
+        return ht.group_normalization_op(x, self.scale_var, self.bias_var, eps=self.eps)

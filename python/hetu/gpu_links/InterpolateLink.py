@@ -17,3 +17,9 @@ def bicubic_interpolate_gradient(input_grad, output, align_corners, stream=None)
     assert isinstance(output, _nd.NDArray)
     _LIB.DLGpuBicubicInterpolateGradient(
         output.handle, input_grad.handle, align_corners, stream.handle if stream else None)
+
+def nearest_interpolate(in_arr, out_arr, stream=None):
+    assert isinstance(in_arr, _nd.NDArray)
+    assert isinstance(out_arr, _nd.NDArray)
+    _LIB.DLGpuNearestInterpolate(
+        in_arr.handle, out_arr.handle, stream.handle if stream else None)

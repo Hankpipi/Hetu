@@ -48,6 +48,8 @@ if(${HETU_COMPILE_MKL})
     target_sources(c_runtime_api PUBLIC ${COMMON_SRC} ${DNNL_OPS_SRC})
 endif()
 
+target_include_directories(c_runtime_api PUBLIC /usr/include/cutlass/include)
+
 if(${HETU_ALLREDUCE})
     add_subdirectory(communication)
 endif()

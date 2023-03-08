@@ -4,6 +4,7 @@
 #include "../common/c_runtime_api.h"
 #include <iostream>
 #include <vector>
+#include <memory>
 #include <set>
 #include <map>
 #include <cassert>

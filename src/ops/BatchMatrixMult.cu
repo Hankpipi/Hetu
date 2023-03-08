@@ -28,12 +28,14 @@ int DLGpuBatchMatrixMultiply(const DLArrayHandle matA, bool transposeA,
         batchCount *= matA->shape[i];
     }
 
-    cublasStatus_t res = cublasSgemmStridedBatched(
+    cudaDataType_t data_type = CUDA_R_32F;
+    cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    cublasStatus_t res = cublasGemmStridedBatchedEx(
         cublas_map[dev_id], transposeB ? CUBLAS_OP_T : CUBLAS_OP_N,
         transposeA ? CUBLAS_OP_T : CUBLAS_OP_N, m, n, k, &one,
-        (const float *)matB->data, !transposeB ? m : k, strideB,
-        (const float *)matA->data, !transposeA ? k : n, strideA, &zero,
-        (float *)matC->data, m, strideC, batchCount);
+        (const float *)matB->data, data_type, !transposeB ? m : k, strideB,
+        (const float *)matA->data, data_type, !transposeA ? k : n, strideA, &zero,
+        (float *)matC->data, data_type, m, strideC, batchCount, data_type, algo);
     assert(res == CUBLAS_STATUS_SUCCESS);
     return 0;
 }

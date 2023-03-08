@@ -26,7 +26,7 @@ class HetuMemoryPool(object):
         self.ln_bn_grad_nodes = (Batch_Normalization_Gradient_of_DataOp, Batch_Normalization_Gradient_of_ScaleOp, Batch_Normalization_Gradient_of_BiasOp,
                                  Layer_Normalization_Gradient_of_DataOp, Layer_Normalization_Gradient_of_ScaleOp, Layer_Normalization_Gradient_of_BiasOp)
 
-    def compute_memory_reuse_plan(self, computing_nodes, node_to_shape, eval_node_list):
+    def compute_memory_reuse_plan(self, computing_nodes, node_to_shape, eval_node_list, inference):
         persistent_nodes = self.form_persistent_nodes(
             eval_node_list, node_to_shape)
         # compute output deg
@@ -50,7 +50,8 @@ class HetuMemoryPool(object):
                 for n in node.inputs:
                     release_node(n)
             else:
-                memory_pool[(node_to_shape[node], node.ctx)].append(node)
+                if not (isinstance(node, DropoutOp) and inference):
+                    memory_pool[(node_to_shape[node], node.ctx)].append(node)
 
         for node in computing_nodes:
             if node.inplace or isinstance(node, EmbeddingLookUp_Gradient):
@@ -85,7 +86,7 @@ class HetuMemoryPool(object):
                              for node in eval_node_list])
         param_psval_map = config.infer_ps_map if inference else config.ps_map
         reuse_map = self.compute_memory_reuse_plan(
-            computing_nodes, node_to_shape_map, eval_node_list)
+            computing_nodes, node_to_shape_map, eval_node_list, inference)
         for node, shape in node_to_shape_map.items():
             if isinstance(node, PlaceholderOp):
                 if placeholder_to_arr_map[node] is not None:

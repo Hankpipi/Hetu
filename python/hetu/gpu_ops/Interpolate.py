@@ -1,7 +1,7 @@
 from __future__ import absolute_import
 import numpy as np
 from .Node import Op
-from ..gpu_links import array_set, bicubic_interpolate, bicubic_interpolate_gradient
+from ..gpu_links import array_set, bicubic_interpolate, bicubic_interpolate_gradient, nearest_interpolate
 
 
 class InterpolateOp(Op):
@@ -11,15 +11,23 @@ class InterpolateOp(Op):
         self.scale_factor = scale_factor
         self.mode = mode
         self.align_corners = align_corners
-        if (self.mode != 'bicubic'):
+        if self.mode not in ['bicubic', 'nearest']:
             assert False
+        if self.mode == 'nearest' and align_corners:
+            raise ValueError(
+                "align_corners option can only be set with the interpolating modes: linear | bilinear | bicubic | trilinear"
+            )
 
     def compute(self, input_vals, output_val, stream_handle=None):
         if self.on_cpu:
             raise NotImplementedError
         else:
-            bicubic_interpolate(
-                input_vals[0], output_val, self.align_corners, stream_handle)
+            if self.mode == 'bicubic':
+                bicubic_interpolate(
+                    input_vals[0], output_val, self.align_corners, stream_handle)
+            elif self.mode == 'nearest':
+                nearest_interpolate(
+                    input_vals[0], output_val, stream_handle)
 
     def gradient(self, output_grad):
         return [interpolate_grad_op(output_grad, self.inputs[0], self.mode, self.align_corners, ctx=self.raw_ctx)]

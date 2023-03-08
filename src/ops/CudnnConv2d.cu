@@ -50,7 +50,7 @@ int CuDNN_DLGpuConv2d(const DLArrayHandle input_x, const DLArrayHandle input_f,
     float *output_data = (float *)output->data;
 
     // search for the best algorithm
-    int request_cnt = 9, return_cnt = 9;
+    int request_cnt = CUDNN_CONVOLUTION_FWD_ALGO_COUNT, return_cnt;
     cudnnConvolutionFwdAlgoPerf_t algo_perf[9];
     CUDNN_CALL(cudnnGetConvolutionForwardAlgorithm_v7(
         cudnn_map[dev_id], input_desc, filter_desc, conv_desc, out_desc,

@@ -225,3 +225,75 @@ int DLGpuBicubicInterpolateGradient(DLArrayHandle input,
 
     return 0;
 }
+
+__global__ void nearest_interp_kernel(const float *input, int n, int c,
+                                      int in_h, int in_w, float *output,
+                                      int out_h, int out_w, float ratio_h,
+                                      float ratio_w) {
+    int nthreads = n * c * out_h * out_w;
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    if (tid >= nthreads)
+        return;
+    int stride = blockDim.x * gridDim.x;
+
+    int in_hw = in_h * in_w;
+    int out_hw = out_h * out_w;
+    int in_chw = c * in_hw;
+    int out_chw = c * out_hw;
+
+    for (; tid < nthreads; tid += stride) {
+        int n_id = tid / out_chw;
+        int chw_id = tid % out_chw;
+        int c_id = chw_id / out_hw;
+        int hw_id = chw_id % out_hw;
+        int out_h_id = hw_id / out_w;
+        int out_w_id = hw_id % out_w;
+
+        float in_h_id_ = ratio_h * out_h_id;
+        int in_h_id = floorf(in_h_id_);
+
+        float in_w_id_ = ratio_w * out_w_id;
+        int in_w_id = floorf(in_w_id_);
+
+        output[tid] = input[n_id * in_chw + c_id * in_hw + in_h_id * in_w + in_w_id];
+    }
+}
+
+int DLGpuNearestInterpolate(const DLArrayHandle input, DLArrayHandle output,
+                            DLStreamHandle stream_handle = NULL) {
+    const int kThreadsPerBlock = 1024;
+
+    int input_N = input->shape[0];
+    int input_C = input->shape[1];
+    int input_H = input->shape[2];
+    int input_W = input->shape[3];
+    int output_H = output->shape[2];
+    int output_W = output->shape[3];
+
+    float ratio_h = 0.f;
+    float ratio_w = 0.f;
+
+    ratio_h = (float)(input_H) / output_H;
+    ratio_w = (float)(input_W) / output_W;
+
+    const float *input_data = (const float *)input->data;
+    float *output_data = (float *)output->data;
+
+    int output_size = input_N * input_C * output_H * output_W;
+
+    int blocks = (output_size + kThreadsPerBlock - 1) / kThreadsPerBlock;
+    int threads = kThreadsPerBlock;
+
+    if (stream_handle)
+        nearest_interp_kernel<<<blocks, threads, 0,
+                                *(cudaStream_t *)stream_handle->handle>>>(
+            input_data, input_N, input_C, input_H, input_W, output_data,
+            output_H, output_W, ratio_h, ratio_w);
+
+    else
+        nearest_interp_kernel<<<blocks, threads>>>(
+            input_data, input_N, input_C, input_H, input_W, output_data,
+            output_H, output_W, ratio_h, ratio_w);
+
+    return 0;
+}

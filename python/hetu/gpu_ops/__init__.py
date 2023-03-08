@@ -114,6 +114,9 @@ from .HAllToAll import halltoall_op
 from .SamGroupSum import sam_group_sum_op
 from .GroupTopKIdx import group_topk_idx_op
 from .SamMax import sam_max_op
+from .Silu import silu_op
+from .GroupNorm import group_normalization_op
+from .MultiHeadAttention import multi_head_attention_op
 
 __all__ = [
     'Executor',
@@ -292,5 +295,8 @@ __all__ = [
     'halltoall_op',
     'sam_group_sum_op',
     'group_topk_idx_op',
-    'sam_max_op'
+    'sam_max_op',
+    'silu_op',
+    'group_normalization_op',
+    'multi_head_attention_op',
 ]

@@ -100,6 +100,9 @@ from .HA2ALayoutTransform import *
 from .SamGroupSumLink import *
 from .GroupTopKIdxLink import *
 from .SamMaxLink import *
+from .SiluLink import *
+from .GroupNormLink import *
+from .MultiHeadAttentionLink import *
 
 __all__ = [
     'abs_val',
@@ -151,6 +154,7 @@ __all__ = [
     'gather_gradient',
     'bicubic_interpolate',
     'bicubic_interpolate_gradient',
+    'nearest_interpolate',
     'masked_fill',
     'matrix_multiply',
     'max',
@@ -275,5 +279,7 @@ __all__ = [
     'sam_group_sum_link',
     'group_topk_idx',
     'sammax_link',
-    'sammax_grad_link'
+    'sammax_grad_link',
+    'silu',
+    'fused_multi_head_attention',
 ]

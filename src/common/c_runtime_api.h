@@ -1133,6 +1133,23 @@ HETUSYS_EXTERN_C {
                         DLArrayHandle top1_group, DLArrayHandle topk_indice,
                         DLArrayHandle output, int num_local_gpus,
                         DLStreamHandle stream_handle);
+
+    int DLGpuSilu(const DLArrayHandle input, DLArrayHandle output,
+                  DLStreamHandle stream_handle);
+
+    int DLGpuNearestInterpolate(const DLArrayHandle input, DLArrayHandle output,
+                                DLStreamHandle stream_handle);
+
+    int DLGpuGroupNormalization(const DLArrayHandle in_arr,
+                                const DLArrayHandle ln_scale,
+                                const DLArrayHandle ln_bias, 
+                                int num_groups, DLArrayHandle mean_arr,
+                                DLArrayHandle var_arr, DLArrayHandle out_arr,
+                                float eps, DLStreamHandle stream_handle);
+
+    int DLGpuFusedMultiHeadAttention(const DLArrayHandle query,
+                                     const DLArrayHandle key, const DLArrayHandle value,
+                                     DLArrayHandle output, int num_heads, DLStreamHandle stream_handle);
 } // HETUSYS_EXTERN_C
 
 #endif // HETUSYS_RUNTIME_C_RUNTIME_API_H_

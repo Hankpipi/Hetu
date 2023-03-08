@@ -78,6 +78,10 @@ int DLGpuRepeat(const DLArrayHandle input, DLArrayHandle output,
         repeat_kernel<<<blocks, threads>>>(input_data, output_data, size,
                                            stride_in, stride_out, dim, ndim);
     }
+
+    del_chunk(dim, dev_id);
+    del_chunk(stride_in, dev_id);
+    del_chunk(stride_out, dev_id);
     return 0;
 }
 

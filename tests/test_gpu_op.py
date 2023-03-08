@@ -1504,29 +1504,81 @@ def test_argmax():
 
 def test_conv2d_add_bias():
     ctx = ht.gpu(0)
-    # im2col and np_conv2d are helper functions
-    shapeX = (100, 3, 28, 28)
-    shapeF = (10, 3, 5, 5)
-    shapeY = (100, 10, 24, 24)
-    shapeB = (10, )
-    x = np.random.uniform(0, 10, size=shapeX).astype(np.float32)
-    f = np.random.uniform(0, 10, size=shapeF).astype(np.float32)
-    b = np.random.uniform(0, 10, size=shapeB).astype(np.float32)
+    padding = (1, 1)
+    shapeX = (2, 4, 64, 64)
+    shapeF = (320, 4, 3, 3)
+    shapeY = (2, 320, 64, 64)
+    shapeB = (320, )
+    x = np.random.uniform(0, 1, size=shapeX).astype(np.float32)
+    f = np.random.uniform(0, 1, size=shapeF).astype(np.float32)
+    b = np.random.uniform(0, 1, size=shapeB).astype(np.float32)
     y = np.zeros(shapeY).astype(np.float32)
     arr_x = ht.array(x, ctx=ctx)
     arr_f = ht.array(f, ctx=ctx)
     arr_b = ht.array(b, ctx=ctx)
     arr_y = ht.empty(shapeY, ctx=ctx)
 
-    gpu_op.CuDNN_conv2d_with_bias(arr_x, arr_f, arr_b, arr_y)
+    gpu_op.CuDNN_conv2d_with_bias(arr_x, arr_f, arr_b, arr_y, padding=padding)
     y = arr_y.asnumpy()
 
     import torch
     tensor_x = torch.tensor(x)
     tensor_f = torch.tensor(f)
     tensor_b = torch.tensor(b)
-    ans = torch.conv2d(tensor_x, tensor_f, tensor_b).numpy()
+    ans = torch.conv2d(tensor_x, tensor_f, tensor_b, padding=padding).numpy()
     np.testing.assert_allclose(ans, y, rtol=1e-6)
+
+
+def test_silu():
+    shape = (2000, 2500)
+    ctx = ht.gpu(0)
+    x = np.random.uniform(-1, 1, shape).astype(np.float32)
+    arr_x = ht.array(x, ctx=ctx)
+    arr_y = ht.empty(shape, ctx=ctx)
+    gpu_op.silu(arr_x, arr_y)
+    y = arr_y.asnumpy()
+
+    import torch
+    ans = torch.nn.SiLU()(torch.Tensor(x)).numpy()
+    np.testing.assert_allclose(ans, y, rtol=1e-6)
+
+
+def test_interpolate():
+    shape = (100, 3, 16, 16)
+    shapeY = (100, 3, 32, 32)
+    ctx = ht.gpu(0)
+    x = np.random.uniform(-1, 1, shape).astype(np.float32)
+    arr_x = ht.array(x, ctx=ctx)
+    arr_y = ht.empty(shapeY, ctx=ctx)
+    gpu_op.nearest_interpolate(arr_x, arr_y)
+    y = arr_y.asnumpy()
+
+    import torch
+    tensor_x = torch.Tensor(x)
+    ans = torch.nn.functional.interpolate(tensor_x, scale_factor=2.0).numpy()
+    np.testing.assert_allclose(ans, y)
+
+
+def test_group_norm():
+    shape = (2, 320, 64, 64)
+    ctx = ht.gpu(0)
+
+    x = np.random.uniform(-1, 1, shape).astype(np.float32)
+    import torch
+    tensor_x = torch.Tensor(x)
+    group_norm = torch.nn.GroupNorm(num_groups=32, num_channels=320)
+    ans = group_norm(tensor_x).detach().numpy()
+
+    arr_x = ht.array(x, ctx=ctx)
+    arr_y = ht.empty(shape, ctx=ctx)
+    arr_scale = ht.array(group_norm.weight.detach().numpy(), ctx=ctx)
+    arr_bias = ht.array(group_norm.bias.detach().numpy(), ctx=ctx)
+    arr_mean = ht.empty(shape, ctx=ctx)
+    arr_var = ht.empty(shape, ctx=ctx)
+    gpu_op.group_normalization(arr_x, arr_scale, arr_bias, 
+        group_norm.num_groups, arr_mean, arr_var, arr_y, group_norm.eps)
+    y = arr_y.asnumpy()
+    np.testing.assert_allclose(ans, y, rtol=1e-5, atol=1e-8)
 
 
 test_array_set()
@@ -1578,3 +1630,6 @@ test_gelu()
 test_sigmoid()
 test_argmax()
 test_conv2d_add_bias()
+test_silu()
+test_interpolate()
+test_group_norm()
