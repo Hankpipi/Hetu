@@ -1,9 +1,15 @@
 from __future__ import absolute_import
+import os
+import math
 import numpy as np
+from scipy import interpolate
 
+import torch
+import hetu as ht
 from .Node import Op
 from .._base import DNNL_LIB
-from ..gpu_links import matmul_with_bias
+from ..gpu_links import matmul_with_bias, matmul_with_bias_sparse
+from .MaxPool import np_max_pooling
 
 
 class LinearOp(Op):
@@ -11,6 +17,9 @@ class LinearOp(Op):
         super().__init__(LinearOp, [node_A, node_B, bias], ctx)
         self.matmul_attr_trans_A = trans_A
         self.matmul_attr_trans_B = trans_B
+        self.round = 0
+        self.index = None
+        self.output_cache = []
 
     def compute(self, input_vals, output_val, stream_handle=None):
         if self.on_cpu:
@@ -32,10 +41,46 @@ class LinearOp(Op):
                 output_val[:] = np.matmul(
                     np.transpose(input_vals[0]), np.transpose(input_vals[1])) + input_vals[2]
         else:
-            matmul_with_bias(
-                input_vals[0], self.matmul_attr_trans_A,
-                input_vals[1], self.matmul_attr_trans_B, input_vals[2],
-                output_val, stream_handle)
+            if os.path.exists('runtime/mask.pt') and len(input_vals[0].shape) == 3:
+                ctx = input_vals[0].ctx
+                B, L, input_channel = input_vals[0].shape
+                output_channel = output_val.shape[-1]
+                if self.index is None:
+                    mask = torch.load(f'runtime/mask.pt')
+                    width = int(math.sqrt(output_val.shape[-2]))
+                    rate = 96 // width
+
+                    mask = torch.nn.functional.interpolate(
+                        mask.repeat(B, 1, 1, 1), size=(96, 96)
+                    )
+                    
+                    mask = torch.nn.MaxPool2d(kernel_size=rate)(mask.float())
+                    mask = (mask > 0.5)
+
+                    mask = mask.numpy().reshape(-1)
+
+                    self.index = np.where(mask == True)
+                    self.index = ht.array(self.index[0], ctx=ctx)
+                    self.input_sparse = ht.empty(self.index.shape + (input_channel, ), ctx=ctx)
+                    self.output_sparse = ht.empty(self.index.shape + (output_channel, ), ctx=ctx)
+
+                output_val.async_h2d(self.output_cache[self.round], stream_handle)
+                matmul_with_bias_sparse(
+                    input_vals[0], self.matmul_attr_trans_A,
+                    input_vals[1], self.matmul_attr_trans_B, input_vals[2],
+                    output_val, self.index, self.input_sparse, self.output_sparse, stream_handle)
+            else:
+                matmul_with_bias(
+                    input_vals[0], self.matmul_attr_trans_A,
+                    input_vals[1], self.matmul_attr_trans_B, input_vals[2],
+                    output_val, stream_handle)
+
+                if self.round >= len(self.output_cache):
+                    output_cached = ht.empty(output_val.shape, ctx=ht.cpu())
+                    output_cached.async_d2h(output_val, stream_handle=stream_handle)
+                    self.output_cache.append(output_cached)
+
+            self.round += 1
 
     def gradient(self, output_grad):
         from .MatrixMult import matmul_op

@@ -30,6 +30,7 @@ from .PipelineReceive import PipelineReceiveOp
 from .Split import SplitOp
 from .Concatenate import ConcatenateOp
 from .Dropout import DropoutOp
+from .Linear import LinearOp
 from operator import add
 from functools import reduce
 import ctypes
@@ -550,6 +551,19 @@ class Executor(object):
 
     def clearTimer(self, name: str = 'default') -> None:
         self.subexecutor[name].clearTimer()
+
+    def clear_cache(self):
+        for e in self.subexecutor.values():
+            for node in e.computing_nodes:
+                if isinstance(node, LinearOp):
+                    node.index = None
+                    node.output_cache.clear()
+
+    def init_round(self):
+        for e in self.subexecutor.values():
+            for node in e.computing_nodes:
+                if isinstance(node, LinearOp):
+                    node.round = 0
 
     def __del__(self) -> None:
         if self.config.comp_stream is not None:

@@ -740,6 +740,13 @@ HETUSYS_EXTERN_C {
                     const DLArrayHandle bias, DLArrayHandle matC,
                     DLStreamHandle stream_handle);
 
+    int DLGpuLinearSparse(const DLArrayHandle matA, bool transposeA,
+                    const DLArrayHandle matB, bool transposeB,
+                    const DLArrayHandle bias,
+                    DLArrayHandle matC, DLArrayHandle index,
+                    DLArrayHandle matA_sparse, DLArrayHandle matC_sparse,
+                    DLStreamHandle stream_handle);
+
     int Cudnn_Conv2dAddBias(
         const DLArrayHandle input_x, const DLArrayHandle input_f,
         const DLArrayHandle bias, DLArrayHandle output, const int padding_h,

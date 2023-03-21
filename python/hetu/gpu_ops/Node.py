@@ -59,6 +59,34 @@ class Op(object):
             new_node = addbyconst_op(self, other)
         return new_node
 
+    def __sub__(self, other: Union[Op, int]) -> Op:
+        from .MinusElewise import minus_op
+        from .AddConst import addbyconst_op
+
+        # here the operator does NOT specify context
+        # please explicitly specify the context in gradients!!
+        if isinstance(other, Op):
+            new_node = minus_op(self, other)
+        else:
+            # Add by a constant stores the constant in new node's const_attr
+            # 'other' argument is a constant
+            new_node = addbyconst_op(self, -other)
+        return new_node
+
+    def __truediv__(self, other: Union[Op, int]) -> Op:
+        from .Division import div_op
+        from .MultiplyConst import mul_byconst_op
+
+        # here the operator does NOT specify context
+        # please explicitly specify the context in gradients!!
+        if isinstance(other, Op):
+            new_node = div_op(self, other)
+        else:
+            # Add by a constant stores the constant in new node's const_attr
+            # 'other' argument is a constant
+            new_node = mul_byconst_op(self, 1.0 / other)
+        return new_node
+
     def __mul__(self, other: Union[Op, int]) -> Op:
         from .MultiplyElewise import mul_op
         from .MultiplyConst import mul_byconst_op

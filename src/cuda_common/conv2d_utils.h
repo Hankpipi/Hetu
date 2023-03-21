@@ -62,7 +62,6 @@ struct Conv2dDesc {
                const int padding_h, const int padding_w,
                const int stride_h, const int stride_w) {
 
-        // int groups = 2;
         dev_id = (input_x->ctx).device_id;
 
         size_t input_n = input_x->shape[0];
