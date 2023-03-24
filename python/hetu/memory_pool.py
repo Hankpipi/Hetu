@@ -9,6 +9,7 @@ from .gpu_ops.Dropout import DropoutOp
 from .gpu_ops.Sum import SparseSumOp
 from .gpu_ops.PipelineReceive import PipelineReceiveOp
 from .gpu_ops.PipelineSend import PipelineSendOp
+from .gpu_ops.Linear import LinearOp
 from .dataloader import DataloaderOp, GNNDataLoaderOp
 from .optimizer import OptimizerOp
 from . import ndarray
@@ -116,7 +117,7 @@ class HetuMemoryPool(object):
                             node_to_arr_map[node] = node_to_arr_map[node.inputs[0]]
                         else:
                             result = reuse_map.get(node, node)
-                            if result is node:
+                            if (result is node) or isinstance(node, LinearOp):
                                 node_to_arr_map[node] = ndarray.empty(
                                     shape, ctx=node.ctx)
                             else:

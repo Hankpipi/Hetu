@@ -22,7 +22,7 @@ from ..communicator.mpi_nccl_comm import ncclDataType_t, GroupStart, GroupEnd
 from .EmbeddingLookUp import EmbeddingLookUp, EmbeddingLookUp_Gradient
 from ..optimizer import OptimizerOp
 from . import OnesLike
-from ..stream import create_stream_handle, Event
+from ..stream import create_stream_handle, create_event_handle, Event
 from ..context import get_current_context, get_launch_config_by_traverse_nodes, assign_context_by_traverse_nodes, DeviceGroup
 from ..memory_pool import HetuMemoryPool
 from .PipelineSend import PipelineSendOp
@@ -31,6 +31,7 @@ from .Split import SplitOp
 from .Concatenate import ConcatenateOp
 from .Dropout import DropoutOp
 from .Linear import LinearOp
+from .Conv2dAddBias import Conv2dAddBiasOp
 from operator import add
 from functools import reduce
 import ctypes
@@ -552,18 +553,29 @@ class Executor(object):
     def clearTimer(self, name: str = 'default') -> None:
         self.subexecutor[name].clearTimer()
 
-    def clear_cache(self):
-        for e in self.subexecutor.values():
-            for node in e.computing_nodes:
-                if isinstance(node, LinearOp):
-                    node.index = None
-                    node.output_cache.clear()
-
-    def init_round(self):
+    def init_round(self, save_checkpoint):
         for e in self.subexecutor.values():
             for node in e.computing_nodes:
                 if isinstance(node, LinearOp):
                     node.round = 0
+                    node.use_sparse = False
+                    shape = e.node_to_shape_map[node]
+                    if save_checkpoint:
+                        node.index = None
+                    elif len(shape) == 3 and shape[-2] != 77:
+                        node.use_sparse = True
+                elif isinstance(node, Conv2dAddBiasOp):
+                    node.round = 0
+                    node.settings = False
+
+    def load_cache(self, round):
+        for e in self.subexecutor.values():
+            for node in e.computing_nodes:
+                if isinstance(node, LinearOp):
+                    if node.event is None:
+                        node.event = create_event_handle(node.ctx)
+                    e.node_to_arr_map[node].async_h2d(
+                        node.output_cache[round], e.h2d_stream, node.event)
 
     def __del__(self) -> None:
         if self.config.comp_stream is not None:

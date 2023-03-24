@@ -19,6 +19,7 @@ class LinearOp(Op):
         self.matmul_attr_trans_B = trans_B
         self.round = 0
         self.index = None
+        self.use_sparse = False
         self.output_cache = []
 
     def compute(self, input_vals, output_val, stream_handle=None):
@@ -41,7 +42,7 @@ class LinearOp(Op):
                 output_val[:] = np.matmul(
                     np.transpose(input_vals[0]), np.transpose(input_vals[1])) + input_vals[2]
         else:
-            if os.path.exists('runtime/mask.pt') and len(input_vals[0].shape) == 3:
+            if self.use_sparse and self.round >= 10:
                 ctx = input_vals[0].ctx
                 B, L, input_channel = input_vals[0].shape
                 output_channel = output_val.shape[-1]
@@ -64,7 +65,7 @@ class LinearOp(Op):
                     self.input_sparse = ht.empty(self.index.shape + (input_channel, ), ctx=ctx)
                     self.output_sparse = ht.empty(self.index.shape + (output_channel, ), ctx=ctx)
 
-                output_val.async_h2d(self.output_cache[self.round], stream_handle)
+                self.event.sync()
                 matmul_with_bias_sparse(
                     input_vals[0], self.matmul_attr_trans_A,
                     input_vals[1], self.matmul_attr_trans_B, input_vals[2],
@@ -75,7 +76,7 @@ class LinearOp(Op):
                     input_vals[1], self.matmul_attr_trans_B, input_vals[2],
                     output_val, stream_handle)
 
-                if self.round >= len(self.output_cache):
+                if not self.use_sparse:
                     output_cached = ht.empty(output_val.shape, ctx=ht.cpu())
                     output_cached.async_d2h(output_val, stream_handle=stream_handle)
                     self.output_cache.append(output_cached)
