@@ -9,17 +9,22 @@ import hetu as ht
 from .Node import Op
 from .._base import DNNL_LIB
 from ..gpu_links import matmul_with_bias, matmul_with_bias_sparse
-from .MaxPool import np_max_pooling
 
 
 class LinearOp(Op):
+
+    index_pool = {}
+    input_pool = {}
+    output_pool = {}
+
     def __init__(self, node_A, node_B, bias, trans_A=False, trans_B=False, ctx=None):
         super().__init__(LinearOp, [node_A, node_B, bias], ctx)
         self.matmul_attr_trans_A = trans_A
         self.matmul_attr_trans_B = trans_B
         self.round = 0
-        self.index = None
+        self.outdeg = 0
         self.use_sparse = False
+        self.d2h_stream = None
         self.output_cache = []
 
     def compute(self, input_vals, output_val, stream_handle=None):
@@ -46,7 +51,7 @@ class LinearOp(Op):
                 ctx = input_vals[0].ctx
                 B, L, input_channel = input_vals[0].shape
                 output_channel = output_val.shape[-1]
-                if self.index is None:
+                if L not in LinearOp.index_pool:
                     mask = torch.load(f'runtime/mask.pt')
                     width = int(math.sqrt(output_val.shape[-2]))
                     rate = 96 // width
@@ -60,25 +65,42 @@ class LinearOp(Op):
 
                     mask = mask.numpy().reshape(-1)
 
-                    self.index = np.where(mask == True)
-                    self.index = ht.array(self.index[0], ctx=ctx)
-                    self.input_sparse = ht.empty(self.index.shape + (input_channel, ), ctx=ctx)
-                    self.output_sparse = ht.empty(self.index.shape + (output_channel, ), ctx=ctx)
+                    index = np.where(mask == True)
+                    index = ht.array(index[0], ctx=ctx)
+                    LinearOp.index_pool[L] = index
+                    input_sparse = ht.empty(index.shape + (input_channel, ), ctx=ctx)
+                    output_sparse = ht.empty(index.shape + (output_channel, ), ctx=ctx)
+                else:
+                    index = LinearOp.index_pool[L]
+
+                input_shape = index.shape + (input_channel, )
+                output_shape = index.shape + (output_channel, )
+                if input_shape in LinearOp.input_pool:
+                    input_sparse = LinearOp.input_pool[input_shape]
+                else:
+                    input_sparse = ht.empty(input_shape, ctx=ctx)
+                    LinearOp.input_pool[input_shape] = input_sparse
+
+                if output_shape in LinearOp.output_pool:
+                    output_sparse = LinearOp.output_pool[output_shape]
+                else:
+                    output_sparse = ht.empty(output_shape, ctx=ctx)
+                    LinearOp.output_pool[output_shape] = output_sparse
 
                 self.event.sync()
                 matmul_with_bias_sparse(
                     input_vals[0], self.matmul_attr_trans_A,
                     input_vals[1], self.matmul_attr_trans_B, input_vals[2],
-                    output_val, self.index, self.input_sparse, self.output_sparse, stream_handle)
+                    output_val, index, input_sparse, output_sparse, stream_handle)
             else:
                 matmul_with_bias(
                     input_vals[0], self.matmul_attr_trans_A,
                     input_vals[1], self.matmul_attr_trans_B, input_vals[2],
                     output_val, stream_handle)
 
-                if not self.use_sparse:
+                if not self.use_sparse and self.d2h_stream is not None:
                     output_cached = ht.empty(output_val.shape, ctx=ht.cpu())
-                    output_cached.async_d2h(output_val, stream_handle=stream_handle)
+                    output_cached.async_d2h(output_val, stream_handle=self.d2h_stream)
                     self.output_cache.append(output_cached)
 
             self.round += 1

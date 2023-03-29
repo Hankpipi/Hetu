@@ -556,26 +556,23 @@ class Executor(object):
     def init_round(self, save_checkpoint):
         for e in self.subexecutor.values():
             for node in e.computing_nodes:
-                if isinstance(node, LinearOp):
+                if isinstance(node, (LinearOp, Conv2dAddBiasOp)):
                     node.round = 0
+                    node.outdeg = 0
                     node.use_sparse = False
-                    shape = e.node_to_shape_map[node]
-                    if save_checkpoint:
-                        node.index = None
-                    elif len(shape) == 3 and shape[-2] != 77:
-                        node.use_sparse = True
-                elif isinstance(node, Conv2dAddBiasOp):
-                    node.round = 0
-                    node.settings = False
-
-    def load_cache(self, round):
-        for e in self.subexecutor.values():
-            for node in e.computing_nodes:
-                if isinstance(node, LinearOp):
+                    node.d2h_stream = e.d2h_stream                    
                     if node.event is None:
                         node.event = create_event_handle(node.ctx)
-                    e.node_to_arr_map[node].async_h2d(
-                        node.output_cache[round], e.h2d_stream, node.event)
+
+                if isinstance(node, LinearOp):
+                    shape = e.node_to_shape_map[node]
+                    if not save_checkpoint and len(shape) == 3 and shape[-2] != 77:
+                        node.use_sparse = True
+                elif isinstance(node, Conv2dAddBiasOp):
+                    if save_checkpoint:
+                        node.settings = False
+                    elif len(e.node_to_shape_map[node.inputs[0]]) == 4 and node.inputs[1].name != 'conv_out_w':
+                        node.use_sparse = True
 
     def __del__(self) -> None:
         if self.config.comp_stream is not None:
@@ -1043,6 +1040,12 @@ class SubExecutor(object):
             for node in grouping_nodes:
                 node.event.record(p2p_stream)
             grouping_nodes.clear()
+
+        for node in computing_nodes:
+            for n in node.inputs:
+                if isinstance(n, (LinearOp, Conv2dAddBiasOp)):
+                    n.outdeg += 1
+
         for node in computing_nodes:
             if node.on_cpu and isinstance(arr_map[node], ndarray.NDArray):
                 if DNNL_LIB['cpu_ArraySet'] and not isinstance(node, DataD2HOp):
@@ -1078,10 +1081,13 @@ class SubExecutor(object):
                 else:
                     node.compute(input_vals, node_val, cur_stream)
 
-                if isinstance(node.event, Event):
-                    # for d2h op / eval nodes / nodes before [allreduce or ps nodes or pipelinesend nodes]
-                    # for allreduce op
-                    node.event.record(cur_stream)
+                for n in node.inputs:
+                    if isinstance(n, (LinearOp, Conv2dAddBiasOp)) and n.use_sparse:
+                        n.outdeg -= 1
+                        if n.outdeg == 0 and n.round >= 10 and n.round < 50:
+                            cur_stream.sync()
+                            arr_map[n].async_h2d(
+                                n.output_cache[n.round], self.h2d_stream, n.event)
 
         if len(grouping_nodes) > 0:
             make_group()

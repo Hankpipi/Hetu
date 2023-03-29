@@ -10,6 +10,7 @@ from .gpu_ops.Sum import SparseSumOp
 from .gpu_ops.PipelineReceive import PipelineReceiveOp
 from .gpu_ops.PipelineSend import PipelineSendOp
 from .gpu_ops.Linear import LinearOp
+from .gpu_ops.Conv2dAddBias import Conv2dAddBiasOp
 from .dataloader import DataloaderOp, GNNDataLoaderOp
 from .optimizer import OptimizerOp
 from . import ndarray
@@ -51,7 +52,7 @@ class HetuMemoryPool(object):
                 for n in node.inputs:
                     release_node(n)
             else:
-                if not (isinstance(node, DropoutOp) and inference):
+                if not (isinstance(node, DropoutOp) and inference) and not isinstance(node, (LinearOp, Conv2dAddBiasOp)):
                     memory_pool[(node_to_shape[node], node.ctx)].append(node)
 
         for node in computing_nodes:
@@ -61,6 +62,8 @@ class HetuMemoryPool(object):
             key = (shape, node.ctx)
             if shape is None or node in persistent_nodes or isinstance(node, self.indexed_nodes):
                 pass
+            elif isinstance(node, (LinearOp, Conv2dAddBiasOp)):
+                reuse_map[node] = node
             elif len(memory_pool[key]) > 0:
                 reuse_map[node] = memory_pool[key].pop()
             for n in node.inputs:
@@ -117,7 +120,7 @@ class HetuMemoryPool(object):
                             node_to_arr_map[node] = node_to_arr_map[node.inputs[0]]
                         else:
                             result = reuse_map.get(node, node)
-                            if (result is node) or isinstance(node, LinearOp):
+                            if result is node:
                                 node_to_arr_map[node] = ndarray.empty(
                                     shape, ctx=node.ctx)
                             else:

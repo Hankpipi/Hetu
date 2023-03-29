@@ -24,7 +24,10 @@ class Conv2dAddBiasOp(Op):
         self.stride = stride
 
         self.round = 0
+        self.outdeg = 0
+        self.d2h_stream = None
         self.settings = False
+        self.use_sparse = False
         self.gather_index = None
         self.scatter_index = None
         self.block_division_h = 12
@@ -89,7 +92,7 @@ class Conv2dAddBiasOp(Op):
                 input_vals[2].asnumpy().reshape((input_vals[2].shape[0], 1, 1))
         
         else:
-            if os.path.exists('runtime/mask.pt') and len(input_vals[0].shape) == 4:
+            if self.use_sparse and self.round >= 10:
 
                 ctx = input_vals[0].ctx
                 in_N, in_C, in_H, in_W = input_vals[0].shape
@@ -137,7 +140,7 @@ class Conv2dAddBiasOp(Op):
                     self.gather_index = ht.array(np.concatenate((new_index_arr[0], new_index_arr[1])), ctx=ctx)
                     self.gather_map = ht.empty((in_N * self.block_sum, in_C, self.overlapped_block_h, self.overlapped_block_w), ctx=ctx)
 
-                output_val.async_h2d(self.output_cache[self.round], stream_handle)
+                self.event.sync()
                 CuDNN_conv2d_with_bias_sparse(
                     input_vals[0], input_vals[1], input_vals[2], output_val,
                     self.gather_index, self.scatter_index, self.block_sum,
@@ -149,9 +152,9 @@ class Conv2dAddBiasOp(Op):
                 CuDNN_conv2d_with_bias(input_vals[0], input_vals[1], input_vals[2],
                                 output_val, self.padding, self.stride, stream_handle)
 
-                if self.round >= len(self.output_cache):
+                if not self.use_sparse and self.d2h_stream is not None:
                     output_cached = ht.empty(output_val.shape, ctx=ht.cpu())
-                    output_cached.async_d2h(output_val, stream_handle=stream_handle)
+                    output_cached.async_d2h(output_val, stream_handle=self.d2h_stream)
                     self.output_cache.append(output_cached)
 
             self.round += 1
