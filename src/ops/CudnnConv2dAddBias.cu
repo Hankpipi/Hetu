@@ -1,3 +1,4 @@
+#include "gpu_runtime.h"
 #include "conv2d_utils.h"
 
 __global__ void conv2d_add_bias(size_t nthreads,
@@ -14,8 +15,8 @@ __global__ void conv2d_add_bias(size_t nthreads,
 
 /**
 Gather: input [N, C, H, W] ---> output [N * block_sum, C, block_h, block_w].
-To be implemented: fuse activation in it.
-To be implemented: fuse GroupNorm (scale + shift) in it.
+Already implemented: fuse activation in it.
+Already implemented: fuse GroupNorm (scale + shift) in it.
 */
 __global__ void gather_for_conv_kernel(const int nthreads, const float *input, const float *index, float *output, 
                                 const int N, const int C, const int H, const int W, 
@@ -49,7 +50,19 @@ __global__ void gather_for_conv_kernel(const int nthreads, const float *input, c
         return;
     }
     int input_pos = batch_num * C * H * W + channel_num * H * W + input_h * W + input_w;
-    output[output_pos] = input[input_pos];
+    float res = input[input_pos];
+    // Fuse GN
+    if (scale != NULL)
+    {
+        int pos = batch_num * C + channel_num;
+        res *= scale[pos];
+        res += shift[pos];
+    }
+    // Fuse activation function
+    // SiLU
+    if (activation_mode == 1)
+        res = res / (1.0f + exp(-res));
+    output[output_pos] = res;
 }
 
 
@@ -181,6 +194,17 @@ int Cudnn_Conv2dAddBiasSparse(const DLArrayHandle input_x, const DLArrayHandle i
     float *scatter_data = (float *)scatter_map->data;
     float *output_data = (float *)output->data;
 
+    // GN
+    float *scale_data = NULL, *shift_data = NULL;
+    if (scale != NULL)
+    {
+        assert (scale->ndim == 2);
+        assert (scale->shape[0] == input_x->shape[0]);
+        assert (scale->shape[1] == input_x->shape[1]);
+        scale_data = (float *)scale->data;
+        shift_data = (float *)shift->data;
+    }
+
     // Gather
     int in_N = input_x->shape[0];
     int in_C = input_x->shape[1];
@@ -192,13 +216,13 @@ int Cudnn_Conv2dAddBiasSparse(const DLArrayHandle input_x, const DLArrayHandle i
         gather_for_conv_kernel<<<BLOCKS, THREADS_PER_BLOCK, 0,
                                      *(cudaStream_t *)stream_handle->handle>>>(
             nthreads, input_data, (const float *)(gather_index->data), gather_data, 
-            in_N, in_C, in_H, in_W, block_sum, 
-            block_h, block_w);
+            in_N, in_C, in_H, in_W, block_sum, block_h, block_w,
+            activation_mode, scale_data, shift_data);
     else
         gather_for_conv_kernel<<<BLOCKS, THREADS_PER_BLOCK>>>(
             nthreads, input_data, (const float *)(gather_index->data), gather_data, 
-            in_N, in_C, in_H, in_W, block_sum, 
-            block_h, block_w);
+            in_N, in_C, in_H, in_W, block_sum, block_h, block_w,
+            activation_mode, scale_data, shift_data);
 
     // Conv
     // Do not need padding (already calculated in index).
