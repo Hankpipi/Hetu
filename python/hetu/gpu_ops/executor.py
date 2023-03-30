@@ -565,6 +565,7 @@ class Executor(object):
                         node.event = create_event_handle(node.ctx)
 
                 if isinstance(node, LinearOp):
+                    node.crossattn_reuse = None
                     shape = e.node_to_shape_map[node]
                     if not save_checkpoint and len(shape) == 3 and shape[-2] != 77:
                         node.use_sparse = True

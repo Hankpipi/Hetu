@@ -8,7 +8,7 @@ import torch
 import hetu as ht
 from .Node import Op
 from .._base import DNNL_LIB
-from ..gpu_links import matmul_with_bias, matmul_with_bias_sparse
+from ..gpu_links import matmul_with_bias, matmul_with_bias_sparse, layer_normalization, gelu_half
 
 
 class LinearOp(Op):
@@ -17,8 +17,15 @@ class LinearOp(Op):
     input_pool = {}
     output_pool = {}
 
-    def __init__(self, node_A, node_B, bias, trans_A=False, trans_B=False, ctx=None):
-        super().__init__(LinearOp, [node_A, node_B, bias], ctx)
+    def __init__(self, node_A, node_B, bias, trans_A=False, trans_B=False, name=None,
+                 activation_mode=0, ln_weight=None, ln_bias=None, eps=0.01, ctx=None):
+        if ln_weight == None:
+            super().__init__(LinearOp, [node_A, node_B, bias], ctx)
+        else:
+            super().__init__(LinearOp, [node_A, node_B, bias, ln_weight, ln_bias], ctx)
+
+        # Linear
+        self.name = name
         self.matmul_attr_trans_A = trans_A
         self.matmul_attr_trans_B = trans_B
         self.round = 0
@@ -26,6 +33,18 @@ class LinearOp(Op):
         self.use_sparse = False
         self.d2h_stream = None
         self.output_cache = []
+
+        # Activation
+        # 0 stands for Identity function.
+        # 1 stands for GeLU.
+        self.activation_mode = activation_mode
+
+        # LN
+        self.fuse_ln = (ln_weight != None)
+        self.eps = eps
+
+        # CrossAttn key and value reuse.
+        self.crossattn_reuse = None
 
     def compute(self, input_vals, output_val, stream_handle=None):
         if self.on_cpu:
@@ -47,8 +66,15 @@ class LinearOp(Op):
                 output_val[:] = np.matmul(
                     np.transpose(input_vals[0]), np.transpose(input_vals[1])) + input_vals[2]
         else:
+
+            if self.crossattn_reuse != None:
+                # It will be much slower if we use copy!
+                # self.crossattn_reuse.copyto(output_val)
+                output_val = self.crossattn_reuse
+                return 
+            
+            ctx = input_vals[0].ctx
             if self.use_sparse and self.round >= 10:
-                ctx = input_vals[0].ctx
                 B, L, input_channel = input_vals[0].shape
                 output_channel = output_val.shape[-1]
                 if L not in LinearOp.index_pool:
@@ -88,21 +114,48 @@ class LinearOp(Op):
                     LinearOp.output_pool[output_shape] = output_sparse
 
                 self.event.sync()
+                ln_scale_curr = None
+                ln_shift_curr = None 
+                if self.fuse_ln:
+                    ln_scale_curr = input_vals[3]
+                    ln_shift_curr = input_vals[4]
+
                 matmul_with_bias_sparse(
                     input_vals[0], self.matmul_attr_trans_A,
                     input_vals[1], self.matmul_attr_trans_B, input_vals[2],
-                    output_val, index, input_sparse, output_sparse, stream_handle)
+                    output_val, index, input_sparse, output_sparse, 
+                    ln_scale_curr, ln_shift_curr, self.eps, 
+                    self.activation_mode, stream_handle)
             else:
+                # Fuse LN
+                if self.fuse_ln:
+                    mean = ht.empty(input_vals[0].shape[:2], ctx=ctx)
+                    var = ht.empty(input_vals[0].shape[:2], ctx=ctx)
+                    ln_output = ht.empty(input_vals[0].shape, ctx=ctx)
+                    layer_normalization(input_vals[0], input_vals[3], input_vals[4],
+                                mean, var, ln_output, self.eps, stream_handle)
+                else:
+                    ln_output = input_vals[0]
+
+                # Linear
                 matmul_with_bias(
-                    input_vals[0], self.matmul_attr_trans_A,
+                    ln_output, self.matmul_attr_trans_A,
                     input_vals[1], self.matmul_attr_trans_B, input_vals[2],
                     output_val, stream_handle)
+                
+                # Fuse activation Func
+                # GeLU (half of the hidden_states)
+                if self.activation_mode == 1:
+                    gelu_half(output_val, output_val, stream_handle)
 
                 if not self.use_sparse and self.d2h_stream is not None:
                     output_cached = ht.empty(output_val.shape, ctx=ht.cpu())
                     output_cached.async_d2h(output_val, stream_handle=self.d2h_stream)
                     self.output_cache.append(output_cached)
 
+            if (self.name == 'CrossAttn_k' or self.name == 'CrossAttn_v') and self.crossattn_reuse == None:
+                self.crossattn_reuse = ht.empty(output_val.shape, ctx=ctx)
+                output_val.copyto(self.crossattn_reuse)
             self.round += 1
 
     def gradient(self, output_grad):
@@ -141,7 +194,10 @@ class LinearOp(Op):
         return [lhs_grad, rhs_grad, bias_grad]
 
     def infer_shape(self, input_shapes):
-        assert len(input_shapes) == 3
+        if self.fuse_ln:
+            assert len(input_shapes) == 5
+        else:
+            assert len(input_shapes) == 3
         assert len(input_shapes[1]) == 2
         assert len(input_shapes[2]) == 1
         A = input_shapes[0]
@@ -158,7 +214,8 @@ class LinearOp(Op):
         return shape_A + shape_B
 
 
-def linear_op(node_A, node_B, bias, trans_A=False, trans_B=False, ctx=None):
+def linear_op(node_A, node_B, bias, trans_A=False, trans_B=False, name=None,
+              activation_mode=0, ln_weight=None, ln_bias=None, eps=0.01, ctx=None):
     """Make a new instance of Matrix Multiplication with bias and call the instance.
 
     Parameters:
@@ -179,4 +236,5 @@ def linear_op(node_A, node_B, bias, trans_A=False, trans_B=False, ctx=None):
     A new Node instance created by Op.
 
     """
-    return LinearOp(node_A, node_B, bias, trans_A, trans_B, ctx=ctx)
+    return LinearOp(node_A, node_B, bias, trans_A, trans_B, name,
+                    activation_mode, ln_weight, ln_bias, eps, ctx=ctx)
