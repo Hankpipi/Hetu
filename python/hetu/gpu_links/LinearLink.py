@@ -13,11 +13,14 @@ def matmul_with_bias(matA, transA, matB, transB, bias, matC, stream=None):
     _LIB.DLGpuLinear(
         matA.handle, transA, matB.handle, transB, bias.handle, matC.handle, stream.handle if stream else None)
 
-def matmul_with_bias_sparse(matA, transA, matB, transB, bias, matC, index, matA_sparse, matC_sparse, stream=None):
+def matmul_with_bias_sparse(matA, transA, matB, transB, bias, matC, index, matA_sparse, matC_sparse, 
+                            scale=None, shift=None, eps=0.01, activation_mode=0, stream=None):
     assert isinstance(matA, _nd.NDArray)
     assert isinstance(matB, _nd.NDArray)
     assert isinstance(bias, _nd.NDArray)
     assert isinstance(matC, _nd.NDArray)
     _LIB.DLGpuLinearSparse(
-        matA.handle, transA, matB.handle, transB, bias.handle, matC.handle, \
-            index.handle, matA_sparse.handle, matC_sparse.handle, stream.handle if stream else None)
+        matA.handle, transA, matB.handle, transB, bias.handle, matC.handle, 
+            index.handle, matA_sparse.handle, matC_sparse.handle, 
+            scale.handle if scale else None, shift.handle if shift else None,
+            ctypes.c_float(eps), activation_mode, stream.handle if stream else None)

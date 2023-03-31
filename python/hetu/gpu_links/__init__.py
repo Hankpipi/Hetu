@@ -245,6 +245,7 @@ __all__ = [
     'matrix_dot',
     'gelu',
     'gelu_gradient',
+    'gelu_half',
     'cross_entropy',
     'cross_entropy_gradient',
     'cross_entropy_sparse',

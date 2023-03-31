@@ -325,6 +325,10 @@ HETUSYS_EXTERN_C {
      * \param output The output array.
      * \return 0 when success, -1 when failure happens
      */
+
+    int DLGpuGeluHalf(const DLArrayHandle input, DLArrayHandle output,
+                  DLStreamHandle stream_handle);
+
     int DLGpuLeakyRelu(const DLArrayHandle input, const float alpha,
                        DLArrayHandle output, DLStreamHandle stream_handle);
 
@@ -745,6 +749,8 @@ HETUSYS_EXTERN_C {
                     const DLArrayHandle bias,
                     DLArrayHandle matC, DLArrayHandle index,
                     DLArrayHandle matA_sparse, DLArrayHandle matC_sparse,
+                    DLArrayHandle scale, DLArrayHandle shift,
+                    const float eps, const int activation_mode,
                     DLStreamHandle stream_handle);
 
     int Cudnn_Conv2dAddBias(
