@@ -40,6 +40,9 @@ class LinearOp(Op):
         self.activation_mode = activation_mode
 
         # LN
+        self.mean = None
+        self.var = None
+        self.ln_output = None
         self.fuse_ln = (ln_weight != None)
         self.eps = eps
 
@@ -129,11 +132,13 @@ class LinearOp(Op):
             else:
                 # Fuse LN
                 if self.fuse_ln:
-                    mean = ht.empty(input_vals[0].shape[:2], ctx=ctx)
-                    var = ht.empty(input_vals[0].shape[:2], ctx=ctx)
-                    ln_output = ht.empty(input_vals[0].shape, ctx=ctx)
+                    if self.mean is None:
+                        self.mean = ht.empty(input_vals[0].shape[:2], ctx=ctx)
+                        self.var = ht.empty(input_vals[0].shape[:2], ctx=ctx)
+                        self.ln_output = ht.empty(input_vals[0].shape, ctx=ctx)
+                    ln_output = self.ln_output
                     layer_normalization(input_vals[0], input_vals[3], input_vals[4],
-                                mean, var, ln_output, self.eps, stream_handle)
+                                self.mean, self.var, ln_output, self.eps, stream_handle)
                 else:
                     ln_output = input_vals[0]
 

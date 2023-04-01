@@ -570,9 +570,7 @@ class Executor(object):
                     if not save_checkpoint and len(shape) == 3 and shape[-2] != 77:
                         node.use_sparse = True
                 elif isinstance(node, Conv2dAddBiasOp):
-                    if save_checkpoint:
-                        node.settings = False
-                    elif len(e.node_to_shape_map[node.inputs[0]]) == 4 and node.inputs[1].name != 'conv_out_w':
+                    if not save_checkpoint and len(e.node_to_shape_map[node.inputs[0]]) == 4 and node.inputs[1].name != 'conv_out_w':
                         node.use_sparse = True
 
     def __del__(self) -> None:
