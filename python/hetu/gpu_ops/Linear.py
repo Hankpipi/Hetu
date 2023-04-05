@@ -28,6 +28,7 @@ class LinearOp(Op):
         self.name = name
         self.matmul_attr_trans_A = trans_A
         self.matmul_attr_trans_B = trans_B
+        self.mask_rate = 0
         self.round = 0
         self.outdeg = 0
         self.use_sparse = False

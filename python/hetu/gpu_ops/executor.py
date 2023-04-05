@@ -31,7 +31,8 @@ from .Split import SplitOp
 from .Concatenate import ConcatenateOp
 from .Dropout import DropoutOp
 from .Linear import LinearOp
-from .Conv2dAddBias import Conv2dAddBiasOp
+from .Conv2dAddBiasActivate import Conv2dAddBiasActivateOp
+from .ResNet import ResNet
 from operator import add
 from functools import reduce
 import ctypes
@@ -556,7 +557,7 @@ class Executor(object):
     def init_round(self, save_checkpoint):
         for e in self.subexecutor.values():
             for node in e.computing_nodes:
-                if isinstance(node, (LinearOp, Conv2dAddBiasOp)):
+                if isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, ResNet)):
                     node.round = 0
                     node.outdeg = 0
                     node.use_sparse = False
@@ -569,8 +570,11 @@ class Executor(object):
                     shape = e.node_to_shape_map[node]
                     if not save_checkpoint and len(shape) == 3 and shape[-2] != 77:
                         node.use_sparse = True
-                elif isinstance(node, Conv2dAddBiasOp):
+                elif isinstance(node, Conv2dAddBiasActivateOp):
                     if not save_checkpoint and len(e.node_to_shape_map[node.inputs[0]]) == 4 and node.inputs[1].name != 'conv_out_w':
+                        node.use_sparse = True
+                elif isinstance(node, ResNet):
+                    if not save_checkpoint:
                         node.use_sparse = True
 
     def __del__(self) -> None:
@@ -1042,7 +1046,7 @@ class SubExecutor(object):
 
         for node in computing_nodes:
             for n in node.inputs:
-                if isinstance(n, (LinearOp, Conv2dAddBiasOp)):
+                if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet)):
                     n.outdeg += 1
 
         for node in computing_nodes:
@@ -1081,7 +1085,7 @@ class SubExecutor(object):
                     node.compute(input_vals, node_val, cur_stream)
 
                 for n in node.inputs:
-                    if isinstance(n, (LinearOp, Conv2dAddBiasOp)) and n.use_sparse:
+                    if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet)) and n.use_sparse and n.mask_rate < 0.8:
                         n.outdeg -= 1
                         if n.outdeg == 0 and n.round >= 10 and n.round < 50:
                             cur_stream.sync()

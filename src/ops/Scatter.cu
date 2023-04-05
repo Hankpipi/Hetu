@@ -50,3 +50,60 @@ int DLGpuScatter(const DLArrayHandle target, int dim, DLArrayHandle index, DLArr
     }
     return 0;
 }
+
+/**
+Note that the C, block_h and block_w is different now (after Conv).
+Scatter: src [N * block_sum, C, block_h, block_w] ---> target [B, C, H, W].
+Already implemented: fuse add bias in it.
+To be implemented: fuse residual block in it.
+*/
+__global__ void scatter_for_conv_kernel(const int nthreads, float* target, const float* index, const float* src,
+                        const int N, const int C, const int H, const int W, 
+                        const int block_sum, const int block_h, const int block_w,
+                        const int stride_h, const int stride_w, const float *residual = NULL) {
+
+    int ind = blockIdx.x * blockDim.x + threadIdx.x;
+    int src_pos = ind;
+
+    if (ind >= nthreads)
+        return;
+    int offset_w = ind % block_w;
+    ind /= block_w;
+    int offset_h = ind % block_h;
+    ind /= block_h;
+    int channel_num = ind % C;
+    ind /= C;
+    int block_num = ind % block_sum;
+    int batch_num = ind / block_sum;
+
+    int target_h = index[block_num] + offset_h;
+    int target_w = index[block_sum + block_num] + offset_w;
+    int target_pos = batch_num * C * H * W + channel_num * H * W + target_h * W + target_w;
+    target[target_pos] = src[src_pos];
+}
+
+int DLGpuScatterForConv(const DLArrayHandle input, DLArrayHandle output,
+                      DLArrayHandle scatter_index,
+                      const int block_sum, const int stride_h, const int stride_w,
+                      DLStreamHandle stream_handle = NULL) {
+    int out_N = output->shape[0];
+    int out_C = output->shape[1];
+    int out_H = output->shape[2];
+    int out_W = output->shape[3];
+    int block_h = input->shape[2];
+    int block_w = input->shape[3];  
+    int nthreads = out_N * block_sum * out_C * block_h * block_w;
+    int blocks = (nthreads + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;  
+    if (stream_handle)
+        scatter_for_conv_kernel<<<blocks, THREADS_PER_BLOCK, 0,
+                                    *(cudaStream_t *)stream_handle->handle>>>(
+            nthreads, (float*)(output->data), (const float *)(scatter_index->data),
+            (const float *)(input->data), out_N, out_C, out_H, out_W, block_sum, 
+            block_h, block_w, stride_h, stride_w);
+    else
+        scatter_for_conv_kernel<<<blocks, THREADS_PER_BLOCK>>>(
+            nthreads, (float*)(output->data), (const float *)(scatter_index->data),
+            (const float *)(scatter_index->data), out_N, out_C, out_H, out_W, block_sum,
+            block_h, block_w, stride_h, stride_w);
+    return 0;
+}

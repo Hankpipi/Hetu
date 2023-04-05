@@ -82,6 +82,7 @@ from .ReduceMean import reduce_mean_op
 from .OneHot import one_hot_op
 from .Linear import linear_op
 from .Conv2dAddBias import conv2d_add_bias_op
+from .Conv2dAddBiasActivate import conv2d_add_bias_activate_op
 from .AllReduceCommunicate import allreduceCommunicate_op, groupallreduceCommunicate_op, allreduceCommunicatep2p_op
 from .AllGatherCommunicate import allgatherCommunicate_op
 from .ReduceScatterCommunicate import reducescatterCommunicate_op
@@ -117,6 +118,7 @@ from .SamMax import sam_max_op
 from .Silu import silu_op
 from .GroupNorm import group_normalization_op
 from .MultiHeadAttention import multi_head_attention_op
+from .ResNet import resnet
 
 __all__ = [
     'Executor',
@@ -255,6 +257,7 @@ __all__ = [
     'one_hot_op',
     'linear_op',
     'conv2d_add_bias_op',
+    'conv2d_add_bias_activate_op',
     'allreduceCommunicate_op',
     'allreduceCommunicatep2p_op',
     'allgatherCommunicate_op',
@@ -299,4 +302,5 @@ __all__ = [
     'silu_op',
     'group_normalization_op',
     'multi_head_attention_op',
+    'resnet',
 ]
