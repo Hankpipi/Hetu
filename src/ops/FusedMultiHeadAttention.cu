@@ -4,17 +4,17 @@
 #include "xformers/kernel_forward.h"
 
 struct Config {
-  int dev_id;
-  int64_t num_batches, num_heads;
-  int64_t query_seq_len, kv_seq_len;
-  int64_t head_size, value_head_size;
-  int64_t q_stride_h, q_stride_m, q_stride_b;
-  int64_t k_stride_h, k_stride_m, k_stride_b;
-  int64_t v_stride_h, v_stride_m, v_stride_b;
-  const void* query_ptr;
-  const void* key_ptr;
-  const void* value_ptr;
-  void* out_ptr;
+    int dev_id;
+    int64_t num_batches, num_heads;
+    int64_t query_seq_len, kv_seq_len;
+    int64_t head_size, value_head_size;
+    int64_t q_stride_h, q_stride_m, q_stride_b;
+    int64_t k_stride_h, k_stride_m, k_stride_b;
+    int64_t v_stride_h, v_stride_m, v_stride_b;
+    const void* query_ptr;
+    const void* key_ptr;
+    const void* value_ptr;
+    void* out_ptr;
 };
 
 template<typename T, typename ArchTag, bool is_aligned, int queries_per_block, int keys_per_block,
@@ -82,35 +82,52 @@ void BuildCutlassKernel(const Config& config, DLStreamHandle stream) {
 
 template<typename T, typename ArchTag, bool is_aligned, int queries_per_block, int keys_per_block>
 void WrapSingleValueIteration(const Config& config, DLStreamHandle stream) {
-  if (config.value_head_size <= keys_per_block) {
-      BuildCutlassKernel<T, ArchTag, is_aligned, 
-                        queries_per_block, keys_per_block, true>(config, stream);
-  } else {
-      BuildCutlassKernel<T, ArchTag, is_aligned, 
-                        queries_per_block, keys_per_block, false>(config, stream);
-  }
+    if (config.value_head_size <= keys_per_block) {
+        BuildCutlassKernel<T, ArchTag, is_aligned, 
+                            queries_per_block, keys_per_block, true>(config, stream);
+    } else {
+        BuildCutlassKernel<T, ArchTag, is_aligned, 
+                            queries_per_block, keys_per_block, false>(config, stream);
+    }
 }
 
 template<typename T, typename ArchTag, bool is_aligned>
 void WrapKeysPerBlock(const Config& config, DLStreamHandle stream) {
-  if (config.value_head_size <= 64) {
-      WrapSingleValueIteration<T, ArchTag, is_aligned, 64, 64>(config, stream);
-  } else {
-      WrapSingleValueIteration<T, ArchTag, is_aligned, 32, 128>(config, stream);
-  }
+    if (config.value_head_size <= 64) {
+        WrapSingleValueIteration<T, ArchTag, is_aligned, 64, 64>(config, stream);
+    } else {
+        WrapSingleValueIteration<T, ArchTag, is_aligned, 32, 128>(config, stream);
+    }
 }
 
 template<typename T, typename ArchTag>
 void WrapIsAligned(const Config& config, DLStreamHandle stream) {
-  if (reinterpret_cast<uintptr_t>(config.query_ptr) % 16 == 0
-      && reinterpret_cast<uintptr_t>(config.key_ptr) % 16 == 0
-      && reinterpret_cast<uintptr_t>(config.value_ptr) % 16 == 0
-      && config.head_size % (16 / sizeof(T)) == 0
-      && config.value_head_size % (16 / sizeof(T)) == 0) {
-      WrapKeysPerBlock<T, ArchTag, true>(config, stream);
-  } else {
-      WrapKeysPerBlock<T, ArchTag, false>(config, stream);
-  }
+    if (reinterpret_cast<uintptr_t>(config.query_ptr) % 16 == 0
+        && reinterpret_cast<uintptr_t>(config.key_ptr) % 16 == 0
+        && reinterpret_cast<uintptr_t>(config.value_ptr) % 16 == 0
+        && config.head_size % (16 / sizeof(T)) == 0
+        && config.value_head_size % (16 / sizeof(T)) == 0) {
+        WrapKeysPerBlock<T, ArchTag, true>(config, stream);
+    } else {
+        WrapKeysPerBlock<T, ArchTag, false>(config, stream);
+    }
+}
+
+template<typename T>
+void WrapArchTag(const Config& config, DLStreamHandle stream, int dev_id) {
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, dev_id);
+    if (deviceProp.major == 7) {
+        if (deviceProp.minor == 5)
+            WrapIsAligned<T, cutlass::arch::Sm75>(config, stream);
+        else
+            WrapIsAligned<T, cutlass::arch::Sm70>(config, stream);
+    } else if (deviceProp.major == 8) {
+        WrapIsAligned<T, cutlass::arch::Sm80>(config, stream);
+    }
+    else {
+        assert(false);
+    }
 }
 
 int DLGpuFusedMultiHeadAttention(const DLArrayHandle query,
@@ -141,6 +158,7 @@ int DLGpuFusedMultiHeadAttention(const DLArrayHandle query,
     config.key_ptr = (const float *)key->data;
     config.value_ptr = (const float *)value->data;
     config.out_ptr = (float *)output->data;
-    WrapIsAligned<float, cutlass::arch::Sm75>(config, stream_handle);
+    int dev_id = (query->ctx).device_id;
+    WrapArchTag<float>(config, stream_handle, dev_id);
     return 0;
 }
