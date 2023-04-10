@@ -17,7 +17,7 @@ def _load_nccl_lib():
     return lib
 
 
-lib_mpi_nccl = _load_nccl_lib()
+# lib_mpi_nccl = _load_nccl_lib()
 # lib_mpi_nccl = CDLL("./lib_mpi_nccl_runtime_api.so", RTLD_LOCAL)
 
 

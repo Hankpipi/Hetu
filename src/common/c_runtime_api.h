@@ -151,6 +151,10 @@ HETUSYS_EXTERN_C {
     int DLGpuGatherGradient(const DLArrayHandle input,
                             const DLArrayHandle index, DLArrayHandle output,
                             int dim, DLStreamHandle stream_handle);
+    int DLGpuGatherForConv(const DLArrayHandle input, DLArrayHandle output,
+                        DLArrayHandle gather_index, DLArrayHandle scale, DLArrayHandle shift,
+                        const int block_sum, int block_h, int block_w,
+                        DLStreamHandle stream_handle);
     int DLGpuMaskedFill(const DLArrayHandle input, const DLArrayHandle mask,
                         float val, DLArrayHandle output,
                         DLStreamHandle stream_handle);
@@ -1109,6 +1113,11 @@ HETUSYS_EXTERN_C {
     int DLGpuScatter1DGrad(const DLArrayHandle output_grad, DLArrayHandle index,
                            DLArrayHandle input_grad,
                            DLStreamHandle stream_handle = NULL);
+    
+    int DLGpuScatterForConv(const DLArrayHandle input, DLArrayHandle output,
+                      DLArrayHandle scatter_index,
+                      const int block_sum, const int stride_h, const int stride_w,
+                      DLStreamHandle stream_handle);
 
     int DLGpuLog(const DLArrayHandle input, DLArrayHandle output,
                  DLStreamHandle stream_handle = NULL);
@@ -1173,6 +1182,11 @@ HETUSYS_EXTERN_C {
     int DLGpuFusedMultiHeadAttention(const DLArrayHandle query,
                                      const DLArrayHandle key, const DLArrayHandle value,
                                      DLArrayHandle output, int num_heads, DLStreamHandle stream_handle);
+
+    int DLGpuNormSilu(const DLArrayHandle input, DLArrayHandle output,
+                DLArrayHandle scale, DLArrayHandle bias,
+                int block_sum, int activation_mode,
+                DLStreamHandle stream_handle);
 } // HETUSYS_EXTERN_C
 
 #endif // HETUSYS_RUNTIME_C_RUNTIME_API_H_

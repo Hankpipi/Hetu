@@ -130,6 +130,8 @@ int DLGpuLinear(const DLArrayHandle matA, bool transposeA,
     int k = transposeB ? matB->shape[1] : matB->shape[0];
     cudaDataType_t data_type = CUDA_R_32F;
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    if (CUDART_VERSION >= 11000)
+        algo = CUBLAS_GEMM_DEFAULT;
 
     CUBLAS_CALL(cublasGemmEx(cublas_map[dev_id], transposeB ? CUBLAS_OP_T : CUBLAS_OP_N,
                 transposeA ? CUBLAS_OP_T : CUBLAS_OP_N, m, n, k, &one,

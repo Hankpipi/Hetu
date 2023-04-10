@@ -9,11 +9,11 @@ set(HETU_VERSION "all")
 
 # whether to compile allreduce module
 # nccl(*), openmpi required
-set(HETU_ALLREDUCE ON)
+set(HETU_ALLREDUCE OFF)
 
 # whether to compile ps module
 # protobuf(*), zeromq required
-set(HETU_PS ON)
+set(HETU_PS OFF)
 
 # whether to compile geometric module (for GNNs)
 # pybind11(*), metis(*) required
@@ -22,7 +22,7 @@ set(HETU_GEOMETRIC OFF)
 # whether to compile cache module (for PS)
 # to enable this, you must turn HETU_PS on
 # pybind11(*) required
-set(HETU_CACHE ON)
+set(HETU_CACHE OFF)
 
 # whether to compile Hetu ML Module
 set(HETU_ML OFF)
