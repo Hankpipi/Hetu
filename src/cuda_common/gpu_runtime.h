@@ -10,6 +10,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cublas_v2.h>
+#include <cublasLt.h>
 #include <cuda_runtime.h>
 #include <algorithm>
 #include <cfloat>
