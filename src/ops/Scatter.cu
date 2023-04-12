@@ -1,4 +1,7 @@
 #include "gpu_runtime.h"
+#define pi 3.14159265358979323846f
+#define e  2.71828182845904523536f
+#define SQRT_1_2  0.70710678118654757274f  // sqrt(1/2)
 
 __global__ void scatter_kernel(float* target_data, float* index_data, float* src_data, int tgt_col, int src_col, int row){
     int offset = blockIdx.x * blockDim.x + threadIdx.x;
@@ -105,5 +108,55 @@ int DLGpuScatterForConv(const DLArrayHandle input, DLArrayHandle output,
             nthreads, (float*)(output->data), (const float *)(scatter_index->data),
             (const float *)(scatter_index->data), out_N, out_C, out_H, out_W, block_sum,
             block_h, block_w, stride_h, stride_w);
+    return 0;
+}
+
+
+
+__global__ void scatter_for_linear_kernel(float* target_data, const float* index_data,
+                               const float* src_data, const float* add_data, size_t size, int col,
+                               int activation_mode) {
+    size_t ind = blockIdx.x * blockDim.x + threadIdx.x;
+    if (ind >= size)
+        return;
+
+    int nr = ind / col;
+    int nc = ind % col;
+    int ind_new = int(index_data[nr]) * col + nc;
+    float temp = src_data[ind];
+
+    target_data[ind_new] = add_data[ind_new] + temp;
+}
+
+
+int DLGpuScatterForLinear(const DLArrayHandle src, const DLArrayHandle add, DLArrayHandle target, 
+                DLArrayHandle index,
+                const int activation_mode = 0,
+                DLStreamHandle stream_handle = NULL) {
+    assert (src->ndim == 3);
+    int B = src->shape[0];
+    int L = src->shape[1];
+    int col = src->shape[2];
+    int size = B * L * col;
+    dim3 blocks;
+    dim3 threads;
+    cudaStream_t* s = nullptr;
+    if (size <= 1024) {
+        threads.x = size;
+        blocks.x = 1;
+    } else {
+        threads.x = 1024;
+        blocks.x = (size + 1023) / 1024;
+    }
+    if(stream_handle){
+        s = (cudaStream_t*)(stream_handle->handle);
+        scatter_for_linear_kernel<<<blocks, threads, 0, *s>>>(
+            (float *)target->data, (const float *)index->data, (const float *)src->data, (const float *)add->data, 
+            size, col, activation_mode);
+    }else{
+        scatter_for_linear_kernel<<<blocks, threads>>>(
+            (float *)target->data, (const float *)index->data, (const float *)src->data, (const float *)add->data, 
+            size, col, activation_mode);
+    }
     return 0;
 }

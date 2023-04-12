@@ -119,6 +119,7 @@ from .Silu import silu_op
 from .GroupNorm import group_normalization_op
 from .MultiHeadAttention import multi_head_attention_op
 from .ResNet import resnet
+from .Attention import attention
 
 __all__ = [
     'Executor',
@@ -303,4 +304,5 @@ __all__ = [
     'group_normalization_op',
     'multi_head_attention_op',
     'resnet',
+    'attention',
 ]

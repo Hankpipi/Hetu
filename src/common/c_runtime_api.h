@@ -155,6 +155,9 @@ HETUSYS_EXTERN_C {
                         DLArrayHandle gather_index, DLArrayHandle scale, DLArrayHandle shift,
                         const int block_sum, int block_h, int block_w,
                         DLStreamHandle stream_handle);
+    int DLGpuGatherForLinear(const DLArrayHandle input, DLArrayHandle output,
+                        DLArrayHandle index, DLArrayHandle scale, DLArrayHandle shift,
+                        const float eps, DLStreamHandle stream_handle);
     int DLGpuMaskedFill(const DLArrayHandle input, const DLArrayHandle mask,
                         float val, DLArrayHandle output,
                         DLStreamHandle stream_handle);
@@ -1117,6 +1120,11 @@ HETUSYS_EXTERN_C {
     int DLGpuScatterForConv(const DLArrayHandle input, DLArrayHandle output,
                       DLArrayHandle scatter_index,
                       const int block_sum, const int stride_h, const int stride_w,
+                      DLStreamHandle stream_handle);
+
+    int DLGpuScatterForLinear(const DLArrayHandle src, const DLArrayHandle add, DLArrayHandle target, 
+                      DLArrayHandle index,
+                      const int activation_mode,
                       DLStreamHandle stream_handle);
 
     int DLGpuLog(const DLArrayHandle input, DLArrayHandle output,
