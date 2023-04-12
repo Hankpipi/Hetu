@@ -51,6 +51,9 @@ void cublas_init(size_t dev_id, DLStreamHandle stream) {
         cublas_map.insert(std::pair<size_t, cublasHandle_t>(dev_id, cusp));
         CUBLAS_CALL(cublasCreate(&cublas_map[dev_id]));
         is_cublas_init[dev_id] = true;
+#if CUDART_VERSION >= 11000
+        cublasSetMathMode(cublas_map[dev_id], CUBLAS_TF32_TENSOR_OP_MATH);
+#endif
     }
     if (stream) {
         CUBLAS_CALL(cublasSetStream(cublas_map[dev_id],
@@ -118,10 +121,7 @@ int DLEventElapsedTime(DLEventHandle start, DLEventHandle ending,
 }
 
 int GetThreadNum(int cnt) {
-    if (cnt >= 1048576) return 1024;
-    if (cnt >= 262144) return 512;
-    if (cnt >= 65536) return 256;
-    if (cnt >= 16384) return 128;
-    if (cnt >= 256) return 64;
-    return 32;
+    if (cnt >= 1024) return 1024;
+    if (cnt >= 512) return 512;
+    return 256;
 }

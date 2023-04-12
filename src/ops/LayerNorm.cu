@@ -1,38 +1,91 @@
 #include "gpu_reduce.h"
+#define ROWS_PER_BLOCKS 32
 
+/*
+    layer_norm_forward: each warp process one,
+    used when the numer of columns is large.
+*/
 __global__ void layer_norm_forward(const float *x,
                                    const float *scale,
                                    const float *bias,
                                    float* y,
                                    float *mean, float *var,
-                                   const float eps, const int C) {
+                                   const float eps, const int N, const int C) {
     __shared__ float var_share;
     __shared__ float mean_share;
     __shared__ float shared_var[32];
     __shared__ float shared_mean[32];
 
-    int begin = blockIdx.x * C + threadIdx.x;
-    int end = (blockIdx.x + 1) * C;
+    for(int row = blockIdx.x; row < N; row += gridDim.x) {
+        int begin = row * C + threadIdx.x;
+        int end = (row + 1) * C;
+
+        float mean_thread = 0, var_thread = 0;
+        for (int i = begin; i < end; i += blockDim.x) {
+            mean_thread += x[i];
+            var_thread += (x[i] * x[i]);
+        }
+
+        BlockReduceSum(mean_thread, shared_mean);
+        BlockReduceSum(var_thread, shared_var);
+        if (threadIdx.x == 0) {
+            mean[row] = mean_share = mean_thread / C;
+            var_share = var_thread / C - mean_share * mean_share;
+            if (var_share < 0) var_share = 0;
+            var[row] = var_share;
+        }
+        __syncthreads();
+
+        mean_thread = mean_share;
+        var_thread = var_share;
+        float tmp = 1.0f / sqrtf(var_thread + eps);
+        for (int i = begin, j = threadIdx.x; i < end; i += blockDim.x, j += blockDim.x)
+            y[i] = (x[i] - mean_thread) * tmp * scale[j] + bias[j];
+    }
+}
+
+/*
+    layer_norm_forward_v2: each warp process one,
+    used when the numer of columns is small.
+*/
+__global__ void layer_norm_forward_v2(const float *x,
+                                   const float *scale,
+                                   const float *bias,
+                                   float* y,
+                                   float *mean, float *var,
+                                   const float eps, const int N, const int C) {
+    int row = blockIdx.x * ROWS_PER_BLOCKS + threadIdx.y;
+    if (row >= N)
+        return ;
+
+    __shared__ float var_share[ROWS_PER_BLOCKS];
+    __shared__ float mean_share[ROWS_PER_BLOCKS];
+
+    int begin = row * C + threadIdx.x;
+    int end = (row + 1) * C;
 
     float mean_thread = 0, var_thread = 0;
+#pragma unroll(4)
     for (int i = begin; i < end; i += blockDim.x) {
         mean_thread += x[i];
         var_thread += (x[i] * x[i]);
     }
 
-    BlockReduceSum(mean_thread, shared_mean);
-    BlockReduceSum(var_thread, shared_var);
+    mean_thread = WarpReduceSum(mean_thread);
+    var_thread = WarpReduceSum(var_thread);
+
     if (threadIdx.x == 0) {
-        mean[blockIdx.x] = mean_share = mean_thread / C;
-        var_share = var_thread / C - mean_share * mean_share;
-        if (var_share < 0) var_share = 0;
-        var[blockIdx.x] = var_share;
+        mean[row] = mean_share[threadIdx.y] = mean_thread / C;
+        var_share[threadIdx.y] = var_thread / C - mean_share[threadIdx.y] * mean_share[threadIdx.y];
+        if (var_share[threadIdx.y] < 0) var_share[threadIdx.y] = 0;
+        var[row] = var_share[threadIdx.y];
     }
     __syncthreads();
 
-    mean_thread = mean_share;
-    var_thread = var_share;
+    mean_thread = mean_share[threadIdx.y];
+    var_thread = var_share[threadIdx.y];
     float tmp = 1.0f / sqrtf(var_thread + eps);
+#pragma unroll(4)
     for (int i = begin, j = threadIdx.x; i < end; i += blockDim.x, j += blockDim.x)
         y[i] = (x[i] - mean_thread) * tmp * scale[j] + bias[j];
 }
@@ -46,18 +99,37 @@ int DLGpuLayerNormalization(const DLArrayHandle in_arr,
     int B = 1, C = in_arr->shape[ndim - 1];
     for(int i = 0; i < ndim - 1; ++i)
         B *= in_arr->shape[i];
-    int threads = GetThreadNum(C);
+    dim3 threads;
+    dim3 blocks;
+    if (C >= 1024) {
+        blocks.x = B / 2;
+        threads.x = GetThreadNum(C);
 
-    if (stream_handle)
-        layer_norm_forward<<<B, threads, 0, *(cudaStream_t *)stream_handle->handle>>>(
-                (const float *)in_arr->data, (const float *)ln_scale->data,
-                (const float *)ln_bias->data, (float *)out_arr->data,
-                (float *)mean_arr->data, (float *)var_arr->data, eps, C);
-    else
-        layer_norm_forward<<<B, threads, 0>>>(
-                (const float *)in_arr->data, (const float *)ln_scale->data,
-                (const float *)ln_bias->data, (float *)out_arr->data,
-                (float *)mean_arr->data, (float *)var_arr->data, eps, C);
+        if (stream_handle)
+            layer_norm_forward<<<blocks, threads, 0, *(cudaStream_t *)stream_handle->handle>>>(
+                    (const float *)in_arr->data, (const float *)ln_scale->data,
+                    (const float *)ln_bias->data, (float *)out_arr->data,
+                    (float *)mean_arr->data, (float *)var_arr->data, eps, B, C);
+        else
+            layer_norm_forward<<<blocks, threads, 0>>>(
+                    (const float *)in_arr->data, (const float *)ln_scale->data,
+                    (const float *)ln_bias->data, (float *)out_arr->data,
+                    (float *)mean_arr->data, (float *)var_arr->data, eps, B, C);
+    } else {
+        blocks.x = (B + ROWS_PER_BLOCKS - 1) / ROWS_PER_BLOCKS;
+        threads.x = 32;
+        threads.y = ROWS_PER_BLOCKS;
+        if (stream_handle)
+            layer_norm_forward_v2<<<blocks, threads, 0, *(cudaStream_t *)stream_handle->handle>>>(
+                    (const float *)in_arr->data, (const float *)ln_scale->data,
+                    (const float *)ln_bias->data, (float *)out_arr->data,
+                    (float *)mean_arr->data, (float *)var_arr->data, eps, B, C);
+        else
+            layer_norm_forward_v2<<<blocks, threads, 0>>>(
+                    (const float *)in_arr->data, (const float *)ln_scale->data,
+                    (const float *)ln_bias->data, (float *)out_arr->data,
+                    (float *)mean_arr->data, (float *)var_arr->data, eps, B, C);
+    }
     return 0;
 }
 

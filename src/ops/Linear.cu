@@ -86,110 +86,11 @@ __global__ void scatter_kernel(float* target_data, const float* index_data,
     target_data[ind_new] = ans;
 }
 
-int CublasLtMatmulAddBias(const DLArrayHandle matA, bool transposeA,
-                const DLArrayHandle matB, bool transposeB,
-                const DLArrayHandle bias,
-                DLArrayHandle matC,
-                DLStreamHandle stream_handle = NULL) {
-    
-    const float* input = (const float*) matA->data;
-    const float* weight = (const float*) matB->data;
-    float* output = (float*) matC->data;
-
-    size_t input_size = bias->shape[0];
-    size_t size = input_size;
-    for(int i = 0; i < matC->ndim - 1; ++i)
-        size *= matC->shape[i];
-    dim3 blocks;
-    dim3 threads;
-    if (size <= 1024) {
-        threads.x = size;
-        blocks.x = 1;
-    } else {
-        threads.x = 1024;
-        blocks.x = (size + 1023) / 1024;
-    }
-    cudaStream_t* s = nullptr;
-    if (stream_handle) {
-        s = (cudaStream_t*)(stream_handle->handle);
-        broadcast_linear_bias<<<blocks, threads, 0, *s>>>(
-            (const float *)(bias->data), output, input_size, size);
-    } else {
-        broadcast_linear_bias<<<blocks, threads>>>(
-            (const float *)(bias->data), output, input_size, size);
-    }
-
-    int dev_id = (matA->ctx).device_id;
-
-    float one = 1.0f;
-    int m = matC->shape[matC->ndim - 1], n = 1;
-    for(int i = 0; i < matC->ndim - 1; ++i)
-        n *= matC->shape[i];
-    int k = transposeB ? matB->shape[1] : matB->shape[0];
-
-    cublasLtHandle_t cublas_lt_handle;
-    cublasLtMatmulDesc_t operation_desc;
-    cublasLtMatrixLayout_t cublas_a_desc;
-    cublasLtMatrixLayout_t cublas_b_desc;
-    cublasLtMatrixLayout_t cublas_c_desc;
-    cublasLtMatmulPreference_t preference;
-    CUBLAS_CALL(cublasLtCreate(&cublas_lt_handle));
-    CUBLAS_CALL(cublasLtMatmulDescCreate(&operation_desc, CUDA_R_32F));
-    CUBLAS_CALL(cublasLtMatrixLayoutCreate(&cublas_a_desc, CUDA_R_32F, 
-                                           !transposeB? m: k, !transposeB? k: m, !transposeB? m: k));
-    CUBLAS_CALL(cublasLtMatrixLayoutCreate(&cublas_b_desc, CUDA_R_32F,
-                                           !transposeA? k: n, !transposeA? n: k, !transposeA? k: n));
-    CUBLAS_CALL(cublasLtMatrixLayoutCreate(&cublas_c_desc, CUDA_R_32F, m, n, m));
-    CUBLAS_CALL(cublasLtMatmulPreferenceCreate(&preference));
-
-    const cublasOperation_t cublas_trans_a = transposeB ? CUBLAS_OP_T : CUBLAS_OP_N;
-    const cublasOperation_t cublas_trans_b = transposeA ? CUBLAS_OP_T : CUBLAS_OP_N;
-    CUBLAS_CALL(cublasLtMatmulDescSetAttribute(operation_desc,
-                                               CUBLASLT_MATMUL_DESC_TRANSA, &cublas_trans_a,
-                                               sizeof(cublas_trans_a)));
-    CUBLAS_CALL(cublasLtMatmulDescSetAttribute(operation_desc,
-                                               CUBLASLT_MATMUL_DESC_TRANSB, &cublas_trans_b,
-                                               sizeof(cublas_trans_b)));
-
-    size_t workspace_size = 8 * 1024 * 1024;
-    CUBLAS_CALL(cublasLtMatmulPreferenceCreate(&preference));
-    CUBLAS_CALL(cublasLtMatmulPreferenceSetAttribute(preference,
-                                                     CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES,
-                                                     &workspace_size, sizeof(workspace_size)));
-    int returned_results = 0;
-    cublasLtMatmulHeuristicResult_t heuristic_result;
-    CUBLAS_CALL(cublasLtMatmulAlgoGetHeuristic(
-        cublas_lt_handle, operation_desc, cublas_a_desc,
-        cublas_b_desc, cublas_c_desc, cublas_c_desc,
-        preference, 1, &heuristic_result, &returned_results));
-
-    void* workspace = find_chunk(workspace_size, dev_id);
-    CUBLAS_CALL(cublasLtMatmul(
-        cublas_lt_handle, operation_desc, &one, weight,
-        cublas_a_desc, input, cublas_b_desc, &one, output, cublas_c_desc,
-        output, cublas_c_desc, &heuristic_result.algo, workspace,
-        workspace_size, *s));
-
-    del_chunk(workspace, dev_id);
-    CUBLAS_CALL(cublasLtDestroy(cublas_lt_handle));
-    CUBLAS_CALL(cublasLtMatmulDescDestroy(operation_desc));
-    CUBLAS_CALL(cublasLtMatrixLayoutDestroy(cublas_a_desc));
-    CUBLAS_CALL(cublasLtMatrixLayoutDestroy(cublas_b_desc));
-    CUBLAS_CALL(cublasLtMatrixLayoutDestroy(cublas_c_desc));
-    CUBLAS_CALL(cublasLtMatmulPreferenceDestroy(preference));
-
-    return 0;
-}
-
 int DLGpuLinear(const DLArrayHandle matA, bool transposeA,
                 const DLArrayHandle matB, bool transposeB,
                 const DLArrayHandle bias,
                 DLArrayHandle matC,
                 DLStreamHandle stream_handle = NULL) {
-    if (CUDART_VERSION >= 11000)
-        return CublasLtMatmulAddBias(matA, transposeA, matB, transposeB,
-            bias, matC, stream_handle);
-
     // cublas assume matrix is column major
     assert(matB->ndim == 2);
     assert(bias->ndim == 1);
@@ -202,12 +103,12 @@ int DLGpuLinear(const DLArrayHandle matA, bool transposeA,
 
     dim3 blocks;
     dim3 threads;
-    if (size <= 1024) {
+    if (size <= THREADS_PER_BLOCK) {
         threads.x = size;
         blocks.x = 1;
     } else {
-        threads.x = 1024;
-        blocks.x = (size + 1023) / 1024;
+        threads.x = THREADS_PER_BLOCK;
+        blocks.x = (size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     }
     cudaStream_t* s = nullptr;
     if (stream_handle) {
@@ -229,6 +130,8 @@ int DLGpuLinear(const DLArrayHandle matA, bool transposeA,
     int k = transposeB ? matB->shape[1] : matB->shape[0];
     cudaDataType_t data_type = CUDA_R_32F;
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    if (CUDART_VERSION >= 11000)
+        algo = CUBLAS_GEMM_DEFAULT;
 
     CUBLAS_CALL(cublasGemmEx(cublas_map[dev_id], transposeB ? CUBLAS_OP_T : CUBLAS_OP_N,
                 transposeA ? CUBLAS_OP_T : CUBLAS_OP_N, m, n, k, &one,
@@ -303,12 +206,12 @@ int DLGpuLinearSparse(const DLArrayHandle matA, bool transposeA,
     }
     // Do not fuse
     else {
-        if (size <= 1024) {
+        if (size <= THREADS_PER_BLOCK) {
             threads.x = size;
             blocks.x = 1;
         } else {
-            threads.x = 1024;
-            blocks.x = (size + 1023) / 1024;
+            threads.x = THREADS_PER_BLOCK;
+            blocks.x = (size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
         }
         if (stream_handle) {
             s = (cudaStream_t*)(stream_handle->handle);
@@ -353,6 +256,8 @@ int DLGpuLinearSparse(const DLArrayHandle matA, bool transposeA,
     int k = transposeB ? matB->shape[1] : matB->shape[0];
     cudaDataType_t data_type = CUDA_R_32F;
     cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    if (CUDART_VERSION >= 11000)
+        algo = CUBLAS_GEMM_DEFAULT;
 
     CUBLAS_CALL(cublasGemmEx(cublas_map[dev_id], transposeB ? CUBLAS_OP_T : CUBLAS_OP_N,
                 transposeA ? CUBLAS_OP_T : CUBLAS_OP_N, m, n, k, &one,

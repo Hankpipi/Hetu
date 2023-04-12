@@ -44,12 +44,12 @@ int DLGpuSlice(const DLArrayHandle in_arr, DLArrayHandle out_arr,
 
     dim3 blocks;
     dim3 threads;
-    if (o_size <= 1024) {
+    if (o_size <= THREADS_PER_BLOCK) {
         threads.x = o_size;
         blocks.x = 1;
     } else {
-        threads.x = 1024;
-        blocks.x = (o_size + 1023) / 1024;
+        threads.x = THREADS_PER_BLOCK;
+        blocks.x = (o_size + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
     }
 
     cudaStream_t cu_stream = static_cast<cudaStream_t>(
@@ -258,11 +258,8 @@ __global__ void slice_gradient_kernel_simple(float *out_arr,
         tmp_index /= o_shape[i];
         i_index += (offset - begin_pos[i]) * i_mat;
         i_mat *= i_shape[i];
-        printf("o_index, i_shape[%d]: %u\n", o_index, i, i_shape[i]);
     }
-    printf("before: %u %u\n", o_index, i_index);
     out_arr[o_index] = in_arr[i_index];
-    printf("after: %u %u\n", o_index, i_index);
 }
 
 int DLGpuSliceGradientSimple(const DLArrayHandle in_arr, DLArrayHandle out_arr,
