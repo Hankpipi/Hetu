@@ -231,6 +231,8 @@ __all__ = [
     'CuDNN_softmax_cross_entropy_gradient',
     'one_hot',
     'matmul_with_bias',
+    'matmul_with_bias_sparse',
+    'matmul_qkv',
     'CuDNN_conv2d_with_bias',
 
     'normal_init',

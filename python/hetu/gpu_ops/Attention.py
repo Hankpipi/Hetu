@@ -5,7 +5,7 @@ import math
 
 from ..ndarray import array, empty, cpu
 from .Node import Op
-from ..gpu_links import layer_normalization, matmul_with_bias, \
+from ..gpu_links import layer_normalization, matmul_with_bias, matmul_qkv, \
                         fused_multi_head_attention, matrix_elementwise_add, \
                         gather_for_linear, scatter_for_linear, matrix_slice_simple
 
@@ -88,14 +88,17 @@ class Attention(Op):
             self.ln_bias = array(attention.norm1.bias, ctx=ctx)
             self.ln_eps = attention.norm1.eps
 
-            '''
             self.attn_weights_qkv = array(torch.cat((attention.attn1.to_q.weight, 
                                                     attention.attn1.to_k.weight,
                                                     attention.attn1.to_v.weight), 0), ctx=ctx)
             self.attn_bias_qkv = empty((attention.attn1.to_q.out_features +
                                         attention.attn1.to_k.out_features +
                                         attention.attn1.to_v.out_features, ), ctx=ctx)
-            '''
+            assert attention.attn1.to_q.out_features == attention.attn1.to_k.out_features
+            assert attention.attn1.to_k.out_features == attention.attn1.to_v.out_features
+            self.gpu_buf_q = None
+            self.gpu_buf_k = None
+            self.gpu_buf_v = None
 
             self.attn_weights_q = array(attention.attn1.to_q.weight, ctx=ctx)
             self.attn_weights_k = array(attention.attn1.to_k.weight, ctx=ctx)
@@ -141,7 +144,7 @@ class Attention(Op):
         else:
             self.k_sparse = empty(BL_sparse + (self.attn_weights_k.shape[0], ), ctx=ctx)
             self.v_sparse = empty(BL_sparse + (self.attn_weights_v.shape[0], ), ctx=ctx)
-            # self.qkv_sparse = empty(BL_sparse + (self.attn_weights_qkv.shape[0], ), ctx=ctx)
+            self.qkv_sparse = empty(BL_sparse + (self.attn_weights_qkv.shape[0], ), ctx=ctx)
         self.hidden_states_sparse = empty(BL_sparse + (self.attn_weights_v.shape[0], ), ctx=ctx)
         self.output_sparse = empty(BL_sparse + (self.attn_to_out_weights.shape[0], ), ctx=ctx)
 
@@ -167,6 +170,7 @@ class Attention(Op):
                                 self.attn_bias_v, self.v_sparse, stream=stream_handle)
         # SelfAttn
         else:
+            '''
             matmul_with_bias(self.input_sparse, False, self.attn_weights_q, True, 
                             self.attn_bias_q, self.q_sparse, stream=stream_handle)
             matmul_with_bias(self.input_sparse, False, self.attn_weights_k, True, 
@@ -174,24 +178,29 @@ class Attention(Op):
             matmul_with_bias(self.input_sparse, False, self.attn_weights_v, True, 
                             self.attn_bias_v, self.v_sparse, stream=stream_handle)
             '''
-            # Fuse qkv matmul. It will be slower!?
+            # Fuse qkv matmul.
+            matmul_qkv(self.input_sparse, False, self.attn_weights_qkv, True, self.attn_bias_qkv,
+                            self.qkv_sparse, self.q_sparse, self.k_sparse, self.v_sparse, stream=stream_handle)
+            
+            '''
             matmul_with_bias(self.input_sparse, False, self.attn_weights_qkv, True, 
                             self.attn_bias_qkv, self.qkv_sparse, stream=stream_handle)
-            gpu_buf_q = array(
-                [0, 0, 0, self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_q.shape[0]],
-                ctx=self.ctx, data_type=np.uintc
-                )
-            gpu_buf_k = array(
-                [0, 0, self.attn_bias_q.shape[0], self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_k.shape[0]],
-                ctx=self.ctx, data_type=np.uintc
-                )
-            gpu_buf_v = array(
-                [0, 0, self.attn_bias_q.shape[0] + self.attn_bias_k.shape[0], self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_v.shape[0]],
-                ctx=self.ctx, data_type=np.uintc
-                )
-            matrix_slice_simple(self.qkv_sparse, self.q_sparse, gpu_buf_q, stream=stream_handle)
-            matrix_slice_simple(self.qkv_sparse, self.k_sparse, gpu_buf_k, stream=stream_handle)
-            matrix_slice_simple(self.qkv_sparse, self.v_sparse, gpu_buf_v, stream=stream_handle)
+            if self.gpu_buf_q == None:
+                self.gpu_buf_q = array(
+                    [0, 0, 0, self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_q.shape[0]],
+                    ctx=self.ctx, data_type=np.uintc
+                    )
+                self.gpu_buf_k = array(
+                    [0, 0, self.attn_bias_q.shape[0], self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_k.shape[0]],
+                    ctx=self.ctx, data_type=np.uintc
+                    )
+                self.gpu_buf_v = array(
+                    [0, 0, self.attn_bias_q.shape[0] + self.attn_bias_k.shape[0], self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_v.shape[0]],
+                    ctx=self.ctx, data_type=np.uintc
+                    )
+            matrix_slice_simple(self.qkv_sparse, self.q_sparse, self.gpu_buf_q, stream=stream_handle)
+            matrix_slice_simple(self.qkv_sparse, self.k_sparse, self.gpu_buf_k, stream=stream_handle)
+            matrix_slice_simple(self.qkv_sparse, self.v_sparse, self.gpu_buf_v, stream=stream_handle)
             '''
         # Fused Attn: q_sparse, k_sparse, v_sparse -> hidden_states_sparse.
         fused_multi_head_attention(self.q_sparse, self.k_sparse, self.v_sparse,
@@ -233,12 +242,17 @@ class Attention(Op):
                             self.attn_bias_v, self.v, stream=stream_handle)
         # SelfAttn
         else:
+            '''
             matmul_with_bias(self.input_buffer, False, self.attn_weights_q, True, 
                             self.attn_bias_q, self.q, stream=stream_handle)
             matmul_with_bias(self.input_buffer, False, self.attn_weights_k, True, 
                             self.attn_bias_k, self.k, stream=stream_handle)
             matmul_with_bias(self.input_buffer, False, self.attn_weights_v, True, 
                             self.attn_bias_v, self.v, stream=stream_handle)
+            '''
+            # Fuse qkv matmul.
+            matmul_qkv(self.input_buffer, False, self.attn_weights_qkv, True, self.attn_bias_qkv,
+                            self.qkv, self.q, self.k, self.v, stream=stream_handle)
         # Fused Attn: q, k, v -> hidden_states.
         fused_multi_head_attention(self.q, self.k, self.v,
                                   self.hidden_states, self.attn_heads, stream=stream_handle)
@@ -269,6 +283,7 @@ class Attention(Op):
         else:
             self.k = empty((B, L, self.attn_weights_k.shape[0]), ctx=self.ctx)
             self.v = empty((B, L, self.attn_weights_v.shape[0]), ctx=self.ctx)
+            self.qkv = empty((B, L, self.attn_weights_qkv.shape[0]), ctx=self.ctx)
         self.hidden_states = empty((B, L, self.attn_weights_v.shape[0]), ctx=self.ctx)
         output_shape = (B, L, self.attn_to_out_weights.shape[0])
         return output_shape

@@ -760,6 +760,12 @@ HETUSYS_EXTERN_C {
                     const float eps, const int activation_mode,
                     DLStreamHandle stream_handle);
 
+    int DLGpuLinearQKV(const DLArrayHandle matA, bool transposeA,
+                const DLArrayHandle matB, bool transposeB,
+                DLArrayHandle bias, DLArrayHandle matC, 
+                DLArrayHandle matQ, DLArrayHandle matK, DLArrayHandle matV,
+                DLStreamHandle stream_handle);
+
     int Cudnn_Conv2dAddBias(
         const DLArrayHandle input_x, const DLArrayHandle input_f,
         const DLArrayHandle bias, DLArrayHandle output, const int padding_h,

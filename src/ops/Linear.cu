@@ -284,3 +284,104 @@ int DLGpuLinearSparse(const DLArrayHandle matA, bool transposeA,
     }
     return 0;
 }
+
+
+
+__global__ void allocate_qkv_kernel(float* x, 
+                               float* q, float* k, float* v,
+                               size_t size, int col) {
+    size_t ind = blockIdx.x * blockDim.x + threadIdx.x;
+    if (ind >= size)
+        return;
+
+    int nr = ind / col;
+    int nc = ind % col;
+    int slice = col / 3;
+    float ans = x[ind];
+    if (nc < slice)
+        q[nr * slice + nc] = ans;
+    else if (nc < 2 * slice)
+        k[nr * slice + nc - slice] = ans;
+    else
+        v[nr * slice + nc - 2 * slice] = ans;
+}
+
+int DLGpuLinearQKV(const DLArrayHandle matA, bool transposeA,
+                const DLArrayHandle matB, bool transposeB,
+                DLArrayHandle bias, DLArrayHandle matC, 
+                DLArrayHandle matQ, DLArrayHandle matK, DLArrayHandle matV,
+                DLStreamHandle stream_handle = NULL) {
+    // cublas assume matrix is column major
+    assert(matA->ndim == 3);
+    assert(matB->ndim == 2);
+    assert(matC->ndim == 3);
+
+    size_t input_size = bias->shape[0];
+    size_t size = input_size;
+    for(int i = 0; i < matC->ndim - 1; ++i)
+        size *= matC->shape[i];
+
+    dim3 blocks;
+    dim3 threads;
+    if (size <= 1024) {
+        threads.x = size;
+        blocks.x = 1;
+    } else {
+        threads.x = 1024;
+        blocks.x = (size + 1023) / 1024;
+    }
+    cudaStream_t* s = nullptr;
+    if (stream_handle) {
+        s = (cudaStream_t*)(stream_handle->handle);
+        broadcast_linear_bias<<<blocks, threads, 0, *s>>>(
+            (const float *)(bias->data), (float *)(matC->data), input_size, size);
+    } else {
+        broadcast_linear_bias<<<blocks, threads>>>(
+            (const float *)(bias->data), (float *)(matC->data), input_size, size);
+    }
+
+    int dev_id = (matA->ctx).device_id;
+    cublas_init(dev_id, stream_handle);
+
+    float one = 1.0f;
+    int m = matC->shape[matC->ndim - 1], n = 1;
+    for(int i = 0; i < matC->ndim - 1; ++i)
+        n *= matC->shape[i];
+    int k = transposeB ? matB->shape[1] : matB->shape[0];
+    cudaDataType_t data_type = CUDA_R_32F;
+    cublasGemmAlgo_t algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    if (CUDART_VERSION >= 11000)
+        algo = CUBLAS_GEMM_DEFAULT;
+
+    CUBLAS_CALL(cublasGemmEx(cublas_map[dev_id], transposeB ? CUBLAS_OP_T : CUBLAS_OP_N,
+                transposeA ? CUBLAS_OP_T : CUBLAS_OP_N, m, n, k, &one,
+                (const float *)matB->data, data_type, !transposeB ? m : k,
+                (const float *)matA->data, data_type, !transposeA ? k : n, &one,
+                (float *)matC->data, data_type, m, data_type, algo));
+
+    // Allocate matC to matQ, matK and matV.
+    size = 1;
+    size_t col = matC->shape[2];
+    for(int i = 0; i < matC->ndim; ++i)
+        size *= matC->shape[i];
+
+    if (size <= 1024) {
+        threads.x = size;
+        blocks.x = 1;
+    } else {
+        threads.x = 1024;
+        blocks.x = (size + 1023) / 1024;
+    }
+    if(stream_handle){
+        allocate_qkv_kernel<<<blocks, threads, 0, *s>>>(
+            (float *)matC->data, 
+            (float *)matQ->data, (float *)matK->data, (float *)matV->data, 
+            size, col);
+    }else{
+        allocate_qkv_kernel<<<blocks, threads>>>(
+            (float *)matC->data, 
+            (float *)matQ->data, (float *)matK->data, (float *)matV->data, 
+            size, col);
+    }
+    return 0;
+}
