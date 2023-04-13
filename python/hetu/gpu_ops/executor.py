@@ -33,6 +33,7 @@ from .Dropout import DropoutOp
 from .Linear import LinearOp
 from .Conv2dAddBiasActivate import Conv2dAddBiasActivateOp
 from .ResNet import ResNet
+from .Attention import Attention
 from operator import add
 from functools import reduce
 import ctypes
@@ -557,7 +558,7 @@ class Executor(object):
     def init_round(self, save_checkpoint):
         for e in self.subexecutor.values():
             for node in e.computing_nodes:
-                if isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, ResNet)):
+                if isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
                     node.round = 0
                     node.outdeg = 0
                     node.use_sparse = False
@@ -574,6 +575,9 @@ class Executor(object):
                     if not save_checkpoint and len(e.node_to_shape_map[node.inputs[0]]) == 4 and node.inputs[1].name != 'conv_out_w':
                         node.use_sparse = True
                 elif isinstance(node, ResNet):
+                    if not save_checkpoint:
+                        node.use_sparse = True
+                elif isinstance(node, Attention):
                     if not save_checkpoint:
                         node.use_sparse = True
 
@@ -1046,7 +1050,7 @@ class SubExecutor(object):
 
         for node in computing_nodes:
             for n in node.inputs:
-                if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet)):
+                if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
                     n.outdeg += 1
 
         for node in computing_nodes:
@@ -1085,7 +1089,10 @@ class SubExecutor(object):
                     node.compute(input_vals, node_val, cur_stream)
 
                 for n in node.inputs:
-                    if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet)) and n.use_sparse and n.mask_rate < 0.8:
+                    if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)) and n.use_sparse:
+                        if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, Attention)) and n.latent_scale < 24 * 24:
+                        # if isinstance(n, Conv2dAddBiasActivateOp) and n.latent_scale < 24 * 24:
+                            continue
                         n.outdeg -= 1
                         if n.outdeg == 0 and n.round >= 10 and n.round < 50:
                             cur_stream.sync()

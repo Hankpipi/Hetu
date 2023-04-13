@@ -28,7 +28,7 @@ class LinearOp(Op):
         self.name = name
         self.matmul_attr_trans_A = trans_A
         self.matmul_attr_trans_B = trans_B
-        self.mask_rate = 0
+        self.latent_scale = 0
         self.round = 0
         self.outdeg = 0
         self.use_sparse = False
@@ -78,7 +78,10 @@ class LinearOp(Op):
                 return 
             
             ctx = input_vals[0].ctx
-            if self.use_sparse and self.round >= 10:
+            if self.latent_scale == 0:
+                self.latent_scale = input_vals[0].shape[1]
+            if self.use_sparse and self.round >= 10 and self.latent_scale >= 24 * 24:
+            # if self.use_sparse and self.round >= 10:
                 B, L, input_channel = input_vals[0].shape
                 output_channel = output_val.shape[-1]
                 if L not in LinearOp.index_pool:

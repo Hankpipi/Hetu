@@ -1,4 +1,5 @@
 #include "gpu_runtime.h"
+#include "gpu_reduce.h"
 
 __global__ void gather_kernel(const float *input, const float *index,
                               float *output, size_t size, int dim_b_input,
@@ -205,3 +206,86 @@ int DLGpuGatherForConv(const DLArrayHandle input, DLArrayHandle output,
 
     return 0;
 }
+
+/*
+__global__ void gather_for_linear_kernel(const float *input, const float *index,
+                                        float *output, size_t size, int col) {
+    size_t ind = blockIdx.x * blockDim.x + threadIdx.x;
+    if (ind >= size)
+        return;
+    int nr = ind / col;
+    int nc = ind % col;
+    int ind_new = int(index[nr]) * col + nc;
+    output[ind] = input[ind_new];
+}
+*/
+
+
+__global__ void gather_for_linear_kernel(const float *x,
+                                   const float *index,
+                                   const float *scale,
+                                   const float *shift,
+                                   float* y,
+                                   const float eps, const int C) {
+    __shared__ float var_share;
+    __shared__ float mean_share;
+    __shared__ float shared_var[32];
+    __shared__ float shared_mean[32];
+
+    int input_x = int(index[blockIdx.x]);
+    int output_begin = blockIdx.x * C + threadIdx.x;
+    int begin = input_x * C + threadIdx.x;
+    int end = (input_x + 1) * C;
+
+    float mean_thread = 0, var_thread = 0;
+    for (int i = begin; i < end; i += blockDim.x) {
+        mean_thread += x[i];
+        var_thread += (x[i] * x[i]);
+    }
+
+    BlockReduceSum(mean_thread, shared_mean);
+    BlockReduceSum(var_thread, shared_var);
+    if (threadIdx.x == 0) {
+        mean_share = mean_thread / C;
+        var_share = var_thread / C - mean_share * mean_share;
+        if (var_share < 0) var_share = 0;
+    }
+    __syncthreads();
+
+    mean_thread = mean_share;
+    var_thread = var_share;
+    float tmp = 1.0f / sqrtf(var_thread + eps);
+    for (int i = begin, j = threadIdx.x, k = output_begin; 
+        i < end; i += blockDim.x, j += blockDim.x, k += blockDim.x)
+        y[k] = (x[i] - mean_thread) * tmp * scale[j] + shift[j];
+}
+
+
+int DLGpuGatherForLinear(const DLArrayHandle input, DLArrayHandle output,
+                        DLArrayHandle index, DLArrayHandle scale, DLArrayHandle shift,
+                        const float eps = 0, DLStreamHandle stream_handle = NULL) {
+    assert (output->ndim == 3);
+    dim3 blocks;
+    dim3 threads;
+    cudaStream_t* s = nullptr;
+    blocks.x = output->shape[0] * output->shape[1];
+    int col = output->shape[2];
+    threads = GetThreadNum(col);
+    if (stream_handle) {
+        s = (cudaStream_t*)(stream_handle->handle);
+        gather_for_linear_kernel<<<blocks, threads, 0, *s>>>(
+            (const float *)(input->data), (const float *)(index->data), 
+            (const float *)(scale->data), (const float *)(shift->data), 
+            (float *)(output->data),
+            eps, col);
+    }
+    else {
+        gather_for_linear_kernel<<<blocks, threads>>>(
+            (const float *)(input->data), (const float *)(index->data), 
+            (const float *)(scale->data), (const float *)(shift->data), 
+            (float *)(output->data),
+            eps, col);
+    }
+    return 0;
+}
+

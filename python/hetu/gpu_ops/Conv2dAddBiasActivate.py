@@ -15,7 +15,7 @@ class Conv2dAddBiasActivateOp(Op):
     workspace_cache = {}
 
     def __init__(self, node_A, node_B, bias, padding=0, stride=1, activation_mode=0,
-                gn_weight=None, gn_bias=None, num_groups=32, eps=0.01, height=None, width=None, ctx=None):
+                gn_weight=None, gn_bias=None, num_groups=32, eps=0.01, height=None, width=None, config=None, ctx=None):
         if gn_weight == None:
             super().__init__(Conv2dAddBiasActivateOp, [node_A, node_B, bias], ctx)
         else:
@@ -29,6 +29,8 @@ class Conv2dAddBiasActivateOp(Op):
             stride = (stride, stride)
         self.stride = stride
 
+        self.config = config
+
         # Conv
         if height is None or height <= 24:
             self.block_division_h = 12
@@ -36,6 +38,7 @@ class Conv2dAddBiasActivateOp(Op):
         else:
             self.block_division_h = height // 2
             self.block_division_w = width // 2
+        self.latent_scale = height * width
 
         self.round = 0
         self.outdeg = 0
@@ -45,7 +48,7 @@ class Conv2dAddBiasActivateOp(Op):
         self.scale = None
         self.shift = None
         self.output_cache = []
-        self.mask_rate = 0
+        self.latent_scale = 0
 
         # Activation
         # 0 stands for Identity function.
@@ -116,7 +119,7 @@ class Conv2dAddBiasActivateOp(Op):
         if key not in Conv2dAddBiasActivateOp.workspace_cache:
             mask = torch.load(f'runtime/mask.pt')
             
-            size_input = in_N * in_C * in_H * in_W
+            flops_input = (out_C * out_H * out_W) * (filter_in_C * filter_H * filter_W)
 
             '''
             Note that the scatter_map is aligned with the default
@@ -147,10 +150,9 @@ class Conv2dAddBiasActivateOp(Op):
             # We need to calculate the overlapped block size considering the conv kernel.
             overlapped_block_h = (block_h - 1) * self.stride[0] + filter_H
             overlapped_block_w = (block_w - 1) * self.stride[1] + filter_W
-            size_new = in_N * block_sum * in_C * overlapped_block_h * overlapped_block_w
-            self.mask_rate = size_new / size_input
-            print(f'origin={size_input}, new_size={size_new}, rate={self.mask_rate}')
-            if self.mask_rate < 0.8:
+            flops_new = (block_sum * out_C * block_h * block_w) * (filter_in_C * filter_H * filter_W)
+            print(f'origin flops={flops_input}, new flops={flops_new}, rate={flops_new / flops_input}')
+            if self.latent_scale >= self.config.latent_scale:
                 new_index_arr = index_arr.copy()
                 new_index_arr[0] = new_index_arr[0] * self.stride[0] - self.padding[0]
                 new_index_arr[1] = new_index_arr[1] * self.stride[1] - self.padding[1]
@@ -284,7 +286,7 @@ class Conv2dAddBiasActivateOp(Op):
 
 def conv2d_add_bias_activate_op(node_A, node_B, bias, padding=0, stride=1, 
                        activation_mode=0, gn_weight=None, gn_bias=None, 
-                       num_groups=32, eps=0.01, height=None, width=None, ctx=None):
+                       num_groups=32, eps=0.01, height=None, width=None, config=None, ctx=None):
     """Conv2d-with-bias node.
 
     Parameters:
@@ -306,4 +308,4 @@ def conv2d_add_bias_activate_op(node_A, node_B, bias, padding=0, stride=1,
 
     """
     return Conv2dAddBiasActivateOp(node_A, node_B, bias, padding, stride, activation_mode,
-                            gn_weight, gn_bias, num_groups, eps, height, width, ctx=ctx)
+                            gn_weight, gn_bias, num_groups, eps, height, width, config, ctx=ctx)
