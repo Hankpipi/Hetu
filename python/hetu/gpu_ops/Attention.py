@@ -7,7 +7,7 @@ from ..ndarray import array, empty, cpu
 from .Node import Op
 from ..gpu_links import layer_normalization, matmul_with_bias, matmul_qkv, \
                         fused_multi_head_attention, matrix_elementwise_add, \
-                        gather_for_linear, scatter_for_linear, matrix_slice_simple
+                        gather_for_linear, scatter_for_linear, scatter_add_for_linear, matrix_slice_simple
 
 '''
 import os
@@ -47,7 +47,7 @@ def show_gpu(simlpe=True):
 '''
 
 class Attention(Op):
-    def __init__(self, node_A, attention, config, encoder_hidden_states=None, ctx=None):
+    def __init__(self, node_A, attention, config, state, encoder_hidden_states=None, ctx=None):
         self.is_cross_attn = (encoder_hidden_states != None)
         if self.is_cross_attn:
             super().__init__(Attention, [node_A, encoder_hidden_states], ctx)
@@ -66,6 +66,7 @@ class Attention(Op):
 
         if self.is_cross_attn:
 
+            assert state == 2
             self.ln_weights = array(attention.norm2.weight, ctx=ctx)
             self.ln_bias = array(attention.norm2.bias, ctx=ctx)
             self.ln_eps = attention.norm2.eps
@@ -84,6 +85,7 @@ class Attention(Op):
 
         else:
 
+            assert state == 1
             self.ln_weights = array(attention.norm1.weight, ctx=ctx)
             self.ln_bias = array(attention.norm1.bias, ctx=ctx)
             self.ln_eps = attention.norm1.eps
@@ -114,7 +116,7 @@ class Attention(Op):
         
         # sparse config
         self.d2h_stream = None
-        self.output_cache = []
+        # self.output_cache = []
 
 
     def build_sparse(self, input_vals, output_val):
@@ -209,8 +211,7 @@ class Attention(Op):
         matmul_with_bias(self.hidden_states_sparse, False, self.attn_to_out_weights, True, 
                         self.attn_to_out_bias, self.output_sparse, stream=stream_handle)
         # Scatter + Add: output_sparse + input -> output.
-        self.event.sync()
-        scatter_for_linear(self.output_sparse, input_vals[0], output_val, self.index, stream=stream_handle)
+        scatter_add_for_linear(self.output_sparse, input_vals[0], output_val, self.index, stream=stream_handle)
 
         self.round += 1
 
@@ -262,13 +263,10 @@ class Attention(Op):
         # Add: output + input -> output.
         matrix_elementwise_add(output_val, input_vals[0], output_val, stream=stream_handle)
         
-        # save checkpoints
-        if not self.use_sparse and self.d2h_stream is not None:
-            output_cached = empty(output_val.shape, ctx=cpu())
-            output_cached.async_d2h(output_val, stream_handle=self.d2h_stream)
-            self.output_cache.append(output_cached)
+        # No need to save checkpoints.
 
         self.round += 1
+        # print (self.is_cross_attn, self.round)
 
     def gradient(self, output_grad):
         raise NotImplementedError
@@ -289,7 +287,7 @@ class Attention(Op):
         return output_shape
 
 
-def attention(node_A, attention, config, encoder_hidden_states=None, ctx=None):
+def attention(node_A, attention, config, state=1, encoder_hidden_states=None, ctx=None):
     """Fused attention node.
 
     Parameters:
@@ -306,4 +304,4 @@ def attention(node_A, attention, config, encoder_hidden_states=None, ctx=None):
     A new Node instance created by Op.
 
     """
-    return Attention(node_A, attention, config, encoder_hidden_states=encoder_hidden_states, ctx=ctx)
+    return Attention(node_A, attention, config, state=state, encoder_hidden_states=encoder_hidden_states, ctx=ctx)

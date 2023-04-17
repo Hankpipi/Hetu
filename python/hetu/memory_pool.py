@@ -11,6 +11,7 @@ from .gpu_ops.PipelineReceive import PipelineReceiveOp
 from .gpu_ops.PipelineSend import PipelineSendOp
 from .gpu_ops.Linear import LinearOp
 from .gpu_ops.Conv2dAddBiasActivate import Conv2dAddBiasActivateOp
+from .gpu_ops.Attention import Attention
 from .dataloader import DataloaderOp, GNNDataLoaderOp
 from .optimizer import OptimizerOp
 from . import ndarray
@@ -52,7 +53,7 @@ class HetuMemoryPool(object):
                 for n in node.inputs:
                     release_node(n)
             else:
-                if not (isinstance(node, DropoutOp) and inference) and not isinstance(node, (LinearOp, Conv2dAddBiasActivateOp)):
+                if not (isinstance(node, DropoutOp) and inference) and not isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, Attention)):
                     memory_pool[(node_to_shape[node], node.ctx)].append(node)
 
         for node in computing_nodes:
@@ -62,7 +63,7 @@ class HetuMemoryPool(object):
             key = (shape, node.ctx)
             if shape is None or node in persistent_nodes or isinstance(node, self.indexed_nodes):
                 pass
-            elif isinstance(node, (LinearOp, Conv2dAddBiasActivateOp)):
+            elif isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, Attention)):
                 reuse_map[node] = node
             elif len(memory_pool[key]) > 0:
                 reuse_map[node] = memory_pool[key].pop()

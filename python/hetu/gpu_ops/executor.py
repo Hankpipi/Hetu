@@ -1052,6 +1052,10 @@ class SubExecutor(object):
             for n in node.inputs:
                 if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
                     n.outdeg += 1
+                    if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp)):
+                        if len(n.output_cache) == 0:
+                            for i in range(50):
+                                n.output_cache.append(ndarray.empty(n.output_shape, ctx=ndarray.cpu()))
 
         for node in computing_nodes:
             if node.on_cpu and isinstance(arr_map[node], ndarray.NDArray):
@@ -1095,6 +1099,8 @@ class SubExecutor(object):
                             continue
                         n.outdeg -= 1
                         if n.outdeg == 0 and n.round >= 10 and n.round < 50:
+                            if isinstance(n, Attention):
+                                continue
                             cur_stream.sync()
                             arr_map[n].async_h2d(
                                 n.output_cache[n.round], self.h2d_stream, n.event)

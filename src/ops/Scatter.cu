@@ -114,6 +114,22 @@ int DLGpuScatterForConv(const DLArrayHandle input, DLArrayHandle output,
 
 
 __global__ void scatter_for_linear_kernel(float* target_data, const float* index_data,
+                               const float* src_data, size_t size, int col,
+                               int activation_mode) {
+    size_t ind = blockIdx.x * blockDim.x + threadIdx.x;
+    if (ind >= size)
+        return;
+
+    int nr = ind / col;
+    int nc = ind % col;
+    int ind_new = int(index_data[nr]) * col + nc;
+    float temp = src_data[ind];
+
+    target_data[ind_new] += temp;
+}
+
+
+__global__ void scatter_add_for_linear_kernel(float* target_data, const float* index_data,
                                const float* src_data, const float* add_data, size_t size, int col,
                                int activation_mode) {
     size_t ind = blockIdx.x * blockDim.x + threadIdx.x;
@@ -129,7 +145,7 @@ __global__ void scatter_for_linear_kernel(float* target_data, const float* index
 }
 
 
-int DLGpuScatterForLinear(const DLArrayHandle src, const DLArrayHandle add, DLArrayHandle target, 
+int DLGpuScatterForLinear(const DLArrayHandle src, DLArrayHandle target, 
                 DLArrayHandle index,
                 const int activation_mode = 0,
                 DLStreamHandle stream_handle = NULL) {
@@ -151,11 +167,44 @@ int DLGpuScatterForLinear(const DLArrayHandle src, const DLArrayHandle add, DLAr
     if(stream_handle){
         s = (cudaStream_t*)(stream_handle->handle);
         scatter_for_linear_kernel<<<blocks, threads, 0, *s>>>(
-            (float *)target->data, (const float *)index->data, (const float *)src->data, (const float *)add->data, 
+            (float *)target->data, (const float *)index->data, (const float *)src->data, 
             size, col, activation_mode);
     }else{
         scatter_for_linear_kernel<<<blocks, threads>>>(
-            (float *)target->data, (const float *)index->data, (const float *)src->data, (const float *)add->data, 
+            (float *)target->data, (const float *)index->data, (const float *)src->data, 
+            size, col, activation_mode);
+    }
+    return 0;
+}
+
+
+int DLGpuScatterAddForLinear(const DLArrayHandle src, const DLArrayHandle add, DLArrayHandle target, 
+                DLArrayHandle index,
+                const int activation_mode = 0,
+                DLStreamHandle stream_handle = NULL) {
+    assert (src->ndim == 3);
+    int B = src->shape[0];
+    int L = src->shape[1];
+    int col = src->shape[2];
+    int size = B * L * col;
+    dim3 blocks;
+    dim3 threads;
+    cudaStream_t* s = nullptr;
+    if (size <= 1024) {
+        threads.x = size;
+        blocks.x = 1;
+    } else {
+        threads.x = 1024;
+        blocks.x = (size + 1023) / 1024;
+    }
+    if(stream_handle){
+        s = (cudaStream_t*)(stream_handle->handle);
+        scatter_add_for_linear_kernel<<<blocks, threads, 0, *s>>>(
+            (float *)target->data, (const float *)index->data, (const float *)src->data, (const float *)add->data,
+            size, col, activation_mode);
+    }else{
+        scatter_add_for_linear_kernel<<<blocks, threads>>>(
+            (float *)target->data, (const float *)index->data, (const float *)src->data, (const float *)add->data,
             size, col, activation_mode);
     }
     return 0;
