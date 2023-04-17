@@ -255,9 +255,7 @@ class Conv2dAddBiasActivateOp(Op):
                         output_val, self.padding, self.stride, stream_handle)
 
         if not self.use_sparse and self.d2h_stream is not None:
-            output_cached = ht.empty(output_val.shape, ctx=ht.cpu())
-            output_cached.async_d2h(output_val, stream_handle=self.d2h_stream)
-            self.output_cache.append(output_cached)
+            self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 
         self.round += 1
 
@@ -281,6 +279,7 @@ class Conv2dAddBiasActivateOp(Op):
         filter_W = input_shapes[1][3]
         out_H = (H + 2 * padding[0] - filter_H) // stride[0] + 1
         out_W = (W + 2 * padding[1] - filter_W) // stride[1] + 1
+        self.output_shape = (N, f_O, out_H, out_W)
         return (N, f_O, out_H, out_W)
 
 

@@ -158,9 +158,7 @@ class LinearOp(Op):
                     gelu_half(output_val, output_val, stream_handle)
 
                 if not self.use_sparse and self.d2h_stream is not None:
-                    output_cached = ht.empty(output_val.shape, ctx=ht.cpu())
-                    output_cached.async_d2h(output_val, stream_handle=self.d2h_stream)
-                    self.output_cache.append(output_cached)
+                    self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 
             if (self.name == 'CrossAttn_k' or self.name == 'CrossAttn_v') and self.crossattn_reuse == None:
                 self.crossattn_reuse = ht.empty(output_val.shape, ctx=ctx)
@@ -220,6 +218,7 @@ class LinearOp(Op):
         if self.matmul_attr_trans_B == True:
             shape_B = (B[0], )
         assert bias_shape == shape_B
+        self.output_shape = shape_A + shape_B
         return shape_A + shape_B
 
 
