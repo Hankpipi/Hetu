@@ -16,6 +16,10 @@ class Conv2dAddBiasActivateOp(Op):
 
     def __init__(self, node_A, node_B, bias, padding=0, stride=1, activation_mode=0,
                 gn_weight=None, gn_bias=None, num_groups=32, eps=0.01, height=None, width=None, config=None, ctx=None):
+        self.mask = None
+        self.limit_1 = None
+        self.limit_2 = None
+        self.config = config
         if gn_weight == None:
             super().__init__(Conv2dAddBiasActivateOp, [node_A, node_B, bias], ctx)
         else:
@@ -28,8 +32,6 @@ class Conv2dAddBiasActivateOp(Op):
             assert isinstance(stride, int)
             stride = (stride, stride)
         self.stride = stride
-
-        self.config = config
 
         # Conv
         if height is None or height <= 24:
@@ -117,7 +119,11 @@ class Conv2dAddBiasActivateOp(Op):
         key = (in_N, in_C, out_C, out_H, out_W, self.stride, self.padding, filter_H, filter_W)
 
         if key not in Conv2dAddBiasActivateOp.workspace_cache:
-            mask = torch.load(f'runtime/mask.pt')
+
+            if self.mask == None:
+                mask = torch.load(f'runtime/mask.pt')
+            else:
+                mask = self.mask
             
             flops_input = (out_C * out_H * out_W) * (filter_in_C * filter_H * filter_W)
 
@@ -151,7 +157,7 @@ class Conv2dAddBiasActivateOp(Op):
             overlapped_block_h = (block_h - 1) * self.stride[0] + filter_H
             overlapped_block_w = (block_w - 1) * self.stride[1] + filter_W
             flops_new = (block_sum * out_C * block_h * block_w) * (filter_in_C * filter_H * filter_W)
-            print(f'origin flops={flops_input}, new flops={flops_new}, rate={flops_new / flops_input}')
+            # print(f'origin flops={flops_input}, new flops={flops_new}, rate={flops_new / flops_input}')
             if self.latent_scale >= self.config.latent_scale:
                 new_index_arr = index_arr.copy()
                 new_index_arr[0] = new_index_arr[0] * self.stride[0] - self.padding[0]
@@ -202,7 +208,7 @@ class Conv2dAddBiasActivateOp(Op):
     def compute(self, input_vals, output_val, stream_handle=None):
         ctx = input_vals[0].ctx
 
-        if self.use_sparse and self.round >= 10:
+        if self.use_sparse and self.round >= self.limit_1 and self.round < self.limit_2:
             self.compute_edit(input_vals, output_val, stream_handle)
             return  
 

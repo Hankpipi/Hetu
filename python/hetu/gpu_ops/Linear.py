@@ -18,7 +18,11 @@ class LinearOp(Op):
     output_pool = {}
 
     def __init__(self, node_A, node_B, bias, trans_A=False, trans_B=False, name=None,
-                 activation_mode=0, ln_weight=None, ln_bias=None, eps=0.01, ctx=None):
+                 activation_mode=0, ln_weight=None, ln_bias=None, eps=0.01, config=None, ctx=None):
+        self.mask = None
+        self.limit_1 = None
+        self.limit_2 = None
+        self.config = config
         if ln_weight == None:
             super().__init__(LinearOp, [node_A, node_B, bias], ctx)
         else:
@@ -48,7 +52,7 @@ class LinearOp(Op):
         self.eps = eps
 
         # CrossAttn key and value reuse.
-        self.crossattn_reuse = None
+        self.reuse = None
 
     def compute(self, input_vals, output_val, stream_handle=None):
         if self.on_cpu:
@@ -71,21 +75,30 @@ class LinearOp(Op):
                     np.transpose(input_vals[0]), np.transpose(input_vals[1])) + input_vals[2]
         else:
 
-            if self.crossattn_reuse != None:
-                # It will be much slower if we use copy!
-                # self.crossattn_reuse.copyto(output_val)
-                output_val = self.crossattn_reuse
+            if self.reuse != None:
+                output_val = self.reuse
+                self.round += 1
                 return 
             
             ctx = input_vals[0].ctx
             if self.latent_scale == 0:
                 self.latent_scale = input_vals[0].shape[1]
-            if self.use_sparse and self.round >= 10 and self.latent_scale >= 24 * 24:
-            # if self.use_sparse and self.round >= 10:
+            
+            if self.use_sparse and (self.name == 'time_embed_1' or self.name == 'time_embed_2' or self.name == 'temb_proj') and self.config.linear_reuse:
+                self.event.sync()
+                self.round += 1
+                return
+            
+            if len(input_vals[0].shape) == 3 and input_vals[0].shape[-2] != 77 and self.use_sparse and \
+                self.round >= self.limit_1 and self.round < self.limit_2 and self.latent_scale >= self.config.latent_scale:
+                
                 B, L, input_channel = input_vals[0].shape
                 output_channel = output_val.shape[-1]
                 if L not in LinearOp.index_pool:
-                    mask = torch.load(f'runtime/mask.pt')
+                    if self.mask == None:
+                        mask = torch.load(f'runtime/mask.pt')
+                    else:
+                        mask = self.mask
                     width = int(math.sqrt(output_val.shape[-2]))
                     rate = 96 // width
 
@@ -160,9 +173,9 @@ class LinearOp(Op):
                 if not self.use_sparse and self.d2h_stream is not None:
                     self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 
-            if (self.name == 'CrossAttn_k' or self.name == 'CrossAttn_v') and self.crossattn_reuse == None:
-                self.crossattn_reuse = ht.empty(output_val.shape, ctx=ctx)
-                output_val.copyto(self.crossattn_reuse)
+            if self.name == 'CrossAttn_k' or self.name == 'CrossAttn_v' and self.config.linear_reuse:
+                self.reuse = ht.empty(output_val.shape, ctx=ctx)
+                output_val.copyto(self.reuse)
             self.round += 1
 
     def gradient(self, output_grad):
@@ -223,7 +236,7 @@ class LinearOp(Op):
 
 
 def linear_op(node_A, node_B, bias, trans_A=False, trans_B=False, name=None,
-              activation_mode=0, ln_weight=None, ln_bias=None, eps=0.01, ctx=None):
+              activation_mode=0, ln_weight=None, ln_bias=None, eps=0.01, config=None, ctx=None):
     """Make a new instance of Matrix Multiplication with bias and call the instance.
 
     Parameters:
@@ -245,4 +258,4 @@ def linear_op(node_A, node_B, bias, trans_A=False, trans_B=False, name=None,
 
     """
     return LinearOp(node_A, node_B, bias, trans_A, trans_B, name,
-                    activation_mode, ln_weight, ln_bias, eps, ctx=ctx)
+                    activation_mode, ln_weight, ln_bias, eps, config=config, ctx=ctx)
