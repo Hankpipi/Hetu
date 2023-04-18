@@ -9,45 +9,12 @@ from ..gpu_links import layer_normalization, matmul_with_bias, matmul_qkv, \
                         fused_multi_head_attention, matrix_elementwise_add, \
                         gather_for_linear, scatter_for_linear, scatter_add_for_linear, matrix_slice_simple
 
-'''
-import os
-from pynvml import *
-def show_gpu(simlpe=True):
-    # 初始化
-    nvmlInit()
-    # 获取GPU个数
-    deviceCount = nvmlDeviceGetCount()
-    total_memory = 0
-    total_free = 0
-    total_used = 0
-    gpu_name = ""
-    gpu_num = deviceCount
- 
-    for i in range(deviceCount):
-        handle = nvmlDeviceGetHandleByIndex(i)
-        info = nvmlDeviceGetMemoryInfo(handle)
-        gpu_name = nvmlDeviceGetName(handle).decode('utf-8')
-        # 查看型号、显存、温度、电源
-        if not simlpe:
-            print("[ GPU{}: {}".format(i, gpu_name), end="    ")
-            print("总共显存: {}G".format((info.total//1048576)/1024), end="    ")
-            print("空余显存: {}G".format((info.free//1048576)/1024), end="    ")
-            print("已用显存: {}G".format((info.used//1048576)/1024), end="    ")
-            print("显存占用率: {}%".format(info.used/info.total), end="    ")
-            print("运行温度: {}摄氏度 ]".format(nvmlDeviceGetTemperature(handle,0)))
- 
-        total_memory += (info.total//1048576)/1024
-        total_free += (info.free//1048576)/1024
-        total_used += (info.used//1048576)/1024
- 
-    print("显卡名称：[{}]，显卡数量：[{}]，总共显存；[{}G]，空余显存：[{}G]，已用显存：[{}G]，显存占用率：[{}%]。".format(gpu_name, gpu_num, total_memory, total_free, total_used, (total_used/total_memory)))
- 
-    #关闭管理工具
-    nvmlShutdown()
-'''
-
 class Attention(Op):
-    def __init__(self, node_A, attention, config, state, encoder_hidden_states=None, ctx=None):
+    def __init__(self, node_A, attention, state, encoder_hidden_states=None, config=None, ctx=None):
+        self.mask = None
+        self.limit_1 = None
+        self.limit_2 = None
+        self.config = config
         self.is_cross_attn = (encoder_hidden_states != None)
         if self.is_cross_attn:
             super().__init__(Attention, [node_A, encoder_hidden_states], ctx)
@@ -58,7 +25,6 @@ class Attention(Op):
         self.latent_scale = 0
         self.built = False
         self.use_sparse = False
-        self.config = config
 
         self.index = None
         self.ln_mean = None
@@ -124,7 +90,10 @@ class Attention(Op):
             return 
         self.built = True
         ctx = self.ctx
-        mask = torch.load(f'runtime/mask.pt')
+        if self.mask == None:
+            mask = torch.load(f'runtime/mask.pt')
+        else:
+            mask = self.mask
         B, L, input_channel = input_vals[0].shape
         output_channel = output_val.shape[-1]
         width = int(math.sqrt(output_val.shape[-2]))
@@ -221,8 +190,7 @@ class Attention(Op):
             raise NotImplementedError
         if self.latent_scale == 0:
             self.latent_scale = input_vals[0].shape[1]
-        if self.use_sparse and self.round >= 10 and self.latent_scale >= self.config.latent_scale:
-        # if self.use_sparse and self.round >= 10:
+        if self.use_sparse and self.round >= self.limit_1 and self.round < self.limit_2 and self.latent_scale >= self.config.latent_scale:
             self.compute_sparse(input_vals, output_val, stream_handle)
             return 
 
@@ -287,7 +255,7 @@ class Attention(Op):
         return output_shape
 
 
-def attention(node_A, attention, config, state=1, encoder_hidden_states=None, ctx=None):
+def attention(node_A, attention, state=1, encoder_hidden_states=None, config=None, ctx=None):
     """Fused attention node.
 
     Parameters:
@@ -304,4 +272,4 @@ def attention(node_A, attention, config, state=1, encoder_hidden_states=None, ct
     A new Node instance created by Op.
 
     """
-    return Attention(node_A, attention, config, state=state, encoder_hidden_states=encoder_hidden_states, ctx=ctx)
+    return Attention(node_A, attention, state=state, encoder_hidden_states=encoder_hidden_states, config=config, ctx=ctx)

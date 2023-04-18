@@ -555,31 +555,25 @@ class Executor(object):
     def clearTimer(self, name: str = 'default') -> None:
         self.subexecutor[name].clearTimer()
 
-    def init_round(self, save_checkpoint):
+    def init_round(self, save_checkpoint, mask=None):
         for e in self.subexecutor.values():
             for node in e.computing_nodes:
                 if isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
-                    node.round = 0
-                    node.outdeg = 0
                     node.use_sparse = False
-                    node.d2h_stream = e.d2h_stream                    
+                    node.limit_1 = 10 if mask is None else 0
+                    node.limit_2 = 50 if mask is None else 45   
+                    if isinstance(node, LinearOp) and (node.name == 'time_embed_1' or node.name == 'time_embed_2' or node.name == 'temb_proj'):
+                        node.limit_1 = 0 
+                        node.limit_2 = 50        
+                    node.outdeg = 0
+                    node.d2h_stream = e.d2h_stream  
+                    node.mask = mask
                     if node.event is None:
-                        node.event = create_event_handle(node.ctx)
+                        node.event = create_event_handle(node.ctx)  
+                    if not save_checkpoint and node.round == 50:
+                        node.use_sparse = True     
+                    node.round = 0
 
-                if isinstance(node, LinearOp):
-                    node.crossattn_reuse = None
-                    shape = e.node_to_shape_map[node]
-                    if not save_checkpoint and len(shape) == 3 and shape[-2] != 77:
-                        node.use_sparse = True
-                elif isinstance(node, Conv2dAddBiasActivateOp):
-                    if not save_checkpoint and len(e.node_to_shape_map[node.inputs[0]]) == 4 and node.inputs[1].name != 'conv_out_w':
-                        node.use_sparse = True
-                elif isinstance(node, ResNet):
-                    if not save_checkpoint:
-                        node.use_sparse = True
-                elif isinstance(node, Attention):
-                    if not save_checkpoint:
-                        node.use_sparse = True
 
     def __del__(self) -> None:
         if self.config.comp_stream is not None:
@@ -1094,13 +1088,20 @@ class SubExecutor(object):
 
                 for n in node.inputs:
                     if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)) and n.use_sparse:
-                        if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, Attention)) and n.latent_scale < 24 * 24:
-                        # if isinstance(n, Conv2dAddBiasActivateOp) and n.latent_scale < 24 * 24:
+                        if isinstance(n, LinearOp):
+                            if n.name == 'time_embed_1' or n.name == 'time_embed_2' or n.name == 'temb_proj':
+                                if n.config.linear_reuse:
+                                    pass
+                                else:
+                                    continue
+                            elif n.latent_scale < n.config.latent_scale:
+                                continue
+                        if isinstance(n, Conv2dAddBiasActivateOp) and n.latent_scale < n.config.latent_scale:
+                            continue
+                        if isinstance(n, Attention):
                             continue
                         n.outdeg -= 1
-                        if n.outdeg == 0 and n.round >= 10 and n.round < 50:
-                            if isinstance(n, Attention):
-                                continue
+                        if n.outdeg == 0 and n.round >= n.limit_1 and n.round < n.limit_2:
                             cur_stream.sync()
                             arr_map[n].async_h2d(
                                 n.output_cache[n.round], self.h2d_stream, n.event)
