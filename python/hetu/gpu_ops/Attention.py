@@ -82,7 +82,7 @@ class Attention(Op):
         
         # sparse config
         self.d2h_stream = None
-        # self.output_cache = []
+        self.output_cache = []
 
 
     def build_sparse(self, input_vals, output_val):
@@ -97,11 +97,7 @@ class Attention(Op):
         B, L, input_channel = input_vals[0].shape
         output_channel = output_val.shape[-1]
         width = int(math.sqrt(output_val.shape[-2]))
-        rate = 96 // width
-        mask = torch.nn.functional.interpolate(
-            mask.repeat(B, 1, 1, 1), size=(96, 96)
-        )
-        mask = torch.nn.MaxPool2d(kernel_size=rate)(mask.float())
+        mask = torch.nn.MaxPool2d(kernel_size=(mask.shape[-2] // width, mask.shape[-1] // width))(mask.float().repeat(B, 1, 1, 1)) 
         mask = (mask > 0.5)
         mask = mask.numpy().reshape(-1)
         index = np.where(mask == True)
@@ -180,7 +176,12 @@ class Attention(Op):
         matmul_with_bias(self.hidden_states_sparse, False, self.attn_to_out_weights, True, 
                         self.attn_to_out_bias, self.output_sparse, stream=stream_handle)
         # Scatter + Add: output_sparse + input -> output.
-        scatter_add_for_linear(self.output_sparse, input_vals[0], output_val, self.index, stream=stream_handle)
+        if self.config.fuse_attn1_attn2_ff:
+            scatter_add_for_linear(self.output_sparse, input_vals[0], output_val, self.index, stream=stream_handle)
+        else:
+            self.event.sync()
+            scatter_for_linear(self.output_sparse, output_val, self.index, merge_rate=self.config.merge_rate, stream=stream_handle)
+            matrix_elementwise_add(output_val, input_vals[0], output_val, stream=stream_handle)
 
         self.round += 1
 
@@ -190,7 +191,7 @@ class Attention(Op):
             raise NotImplementedError
         if self.latent_scale == 0:
             self.latent_scale = input_vals[0].shape[1]
-        if self.use_sparse and self.round >= self.limit_1 and self.round < self.limit_2 and self.latent_scale >= self.config.latent_scale:
+        if self.use_sparse and self.round >= self.limit_1 and self.round < self.limit_2 and self.latent_scale >= self.config.latent_scale_attn:
             self.compute_sparse(input_vals, output_val, stream_handle)
             return 
 
@@ -228,10 +229,13 @@ class Attention(Op):
         # Linear: hidden_states -> output.
         matmul_with_bias(self.hidden_states, False, self.attn_to_out_weights, True, 
                         self.attn_to_out_bias, output_val, stream=stream_handle)
+        
+        if self.config.fuse_attn1_attn2_ff == False and self.use_sparse == False and self.d2h_stream is not None:
+            self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
+
         # Add: output + input -> output.
         matrix_elementwise_add(output_val, input_vals[0], output_val, stream=stream_handle)
         
-        # No need to save checkpoints.
 
         self.round += 1
         # print (self.is_cross_attn, self.round)
@@ -251,8 +255,8 @@ class Attention(Op):
             self.v = empty((B, L, self.attn_weights_v.shape[0]), ctx=self.ctx)
             self.qkv = empty((B, L, self.attn_weights_qkv.shape[0]), ctx=self.ctx)
         self.hidden_states = empty((B, L, self.attn_weights_v.shape[0]), ctx=self.ctx)
-        output_shape = (B, L, self.attn_to_out_weights.shape[0])
-        return output_shape
+        self.output_shape = (B, L, self.attn_to_out_weights.shape[0])
+        return self.output_shape
 
 
 def attention(node_A, attention, state=1, encoder_hidden_states=None, config=None, ctx=None):

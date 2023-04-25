@@ -115,7 +115,7 @@ int DLGpuScatterForConv(const DLArrayHandle input, DLArrayHandle output,
 
 __global__ void scatter_for_linear_kernel(float* target_data, const float* index_data,
                                const float* src_data, size_t size, int col,
-                               int activation_mode) {
+                               int activation_mode, const float merge_rate) {
     size_t ind = blockIdx.x * blockDim.x + threadIdx.x;
     if (ind >= size)
         return;
@@ -125,13 +125,13 @@ __global__ void scatter_for_linear_kernel(float* target_data, const float* index
     int ind_new = int(index_data[nr]) * col + nc;
     float temp = src_data[ind];
 
-    target_data[ind_new] += temp;
+    target_data[ind_new] = temp * merge_rate + target_data[ind_new] * (1 - merge_rate);
 }
 
 
 __global__ void scatter_add_for_linear_kernel(float* target_data, const float* index_data,
                                const float* src_data, const float* add_data, size_t size, int col,
-                               int activation_mode) {
+                               const int activation_mode) {
     size_t ind = blockIdx.x * blockDim.x + threadIdx.x;
     if (ind >= size)
         return;
@@ -147,7 +147,7 @@ __global__ void scatter_add_for_linear_kernel(float* target_data, const float* i
 
 int DLGpuScatterForLinear(const DLArrayHandle src, DLArrayHandle target, 
                 DLArrayHandle index,
-                const int activation_mode = 0,
+                const int activation_mode = 0, const float merge_rate = 1.0,
                 DLStreamHandle stream_handle = NULL) {
     assert (src->ndim == 3);
     int B = src->shape[0];
@@ -168,11 +168,11 @@ int DLGpuScatterForLinear(const DLArrayHandle src, DLArrayHandle target,
         s = (cudaStream_t*)(stream_handle->handle);
         scatter_for_linear_kernel<<<blocks, threads, 0, *s>>>(
             (float *)target->data, (const float *)index->data, (const float *)src->data, 
-            size, col, activation_mode);
+            size, col, activation_mode, merge_rate);
     }else{
         scatter_for_linear_kernel<<<blocks, threads>>>(
             (float *)target->data, (const float *)index->data, (const float *)src->data, 
-            size, col, activation_mode);
+            size, col, activation_mode, merge_rate);
     }
     return 0;
 }
@@ -180,7 +180,7 @@ int DLGpuScatterForLinear(const DLArrayHandle src, DLArrayHandle target,
 
 int DLGpuScatterAddForLinear(const DLArrayHandle src, const DLArrayHandle add, DLArrayHandle target, 
                 DLArrayHandle index,
-                const int activation_mode = 0,
+                const int activation_mode = 0,  
                 DLStreamHandle stream_handle = NULL) {
     assert (src->ndim == 3);
     int B = src->shape[0];

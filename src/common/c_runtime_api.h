@@ -1130,7 +1130,7 @@ HETUSYS_EXTERN_C {
 
     int DLGpuScatterForLinear(const DLArrayHandle src, DLArrayHandle target, 
                       DLArrayHandle index,
-                      const int activation_mode,
+                      const int activation_mode, const float merge_rate,
                       DLStreamHandle stream_handle);
 
     int DLGpuScatterAddForLinear(const DLArrayHandle src, const DLArrayHandle add, DLArrayHandle target, 

@@ -40,6 +40,8 @@ class Conv2dAddBiasActivateOp(Op):
         else:
             self.block_division_h = height // 2
             self.block_division_w = width // 2
+            # self.block_division_h = 12
+            # self.block_division_w = 12
         self.latent_scale = height * width
 
         self.round = 0
@@ -140,10 +142,7 @@ class Conv2dAddBiasActivateOp(Op):
             # Assume the original latent's size is no less than 96 * 96.
             block_h = out_H // self.block_division_h
             block_w = out_W // self.block_division_w
-            mask = torch.nn.functional.interpolate(
-                mask.repeat(1, 1, 1, 1), size=(out_H, out_W)
-            )
-            block_mask = torch.nn.MaxPool2d(kernel_size=(block_h, block_w))(mask.float()) 
+            block_mask = torch.nn.MaxPool2d(kernel_size=(mask.shape[-2] // self.block_division_h, mask.shape[-1] // self.block_division_w))(mask.float().repeat(1, 1, 1, 1)) 
             assert (block_mask.shape[-2] == self.block_division_h and block_mask.shape[-1] == self.block_division_w)
             block_mask = (block_mask > 0.5)
             block_mask = block_mask.numpy()[0][0]
@@ -158,7 +157,7 @@ class Conv2dAddBiasActivateOp(Op):
             overlapped_block_w = (block_w - 1) * self.stride[1] + filter_W
             flops_new = (block_sum * out_C * block_h * block_w) * (filter_in_C * filter_H * filter_W)
             # print(f'origin flops={flops_input}, new flops={flops_new}, rate={flops_new / flops_input}')
-            if self.latent_scale >= self.config.latent_scale:
+            if self.latent_scale >= self.config.latent_scale_conv:
                 new_index_arr = index_arr.copy()
                 new_index_arr[0] = new_index_arr[0] * self.stride[0] - self.padding[0]
                 new_index_arr[1] = new_index_arr[1] * self.stride[1] - self.padding[1]

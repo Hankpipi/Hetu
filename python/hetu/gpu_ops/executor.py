@@ -556,9 +556,19 @@ class Executor(object):
         self.subexecutor[name].clearTimer()
 
     def init_round(self, save_checkpoint, mask=None):
+        if save_checkpoint:
+            Conv2dAddBiasActivateOp.workspace_cache.clear()
+            LinearOp.index_pool.clear()
+            LinearOp.input_pool.clear()
+            LinearOp.output_pool.clear()
         for e in self.subexecutor.values():
             for node in e.computing_nodes:
                 if isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
+                    if isinstance(node, Conv2dAddBiasActivateOp) and save_checkpoint:
+                        node.gn_scale_cache = []
+                        node.gn_shift_cache = []
+                    if isinstance(node, Attention):
+                        node.built = False
                     node.use_sparse = False
                     node.limit_1 = 10 if mask is None else 0
                     node.limit_2 = 50 if mask is None else 45   
@@ -1046,7 +1056,8 @@ class SubExecutor(object):
             for n in node.inputs:
                 if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
                     n.outdeg += 1
-                    if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp)):
+                    if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp)) or \
+                                (isinstance(n, Attention) and n.config.fuse_attn1_attn2_ff == False):
                         if len(n.output_cache) == 0:
                             for i in range(50):
                                 n.output_cache.append(ndarray.empty(n.output_shape, ctx=ndarray.cpu()))
@@ -1088,19 +1099,22 @@ class SubExecutor(object):
 
                 for n in node.inputs:
                     if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)) and n.use_sparse:
+                        n.outdeg -= 1
                         if isinstance(n, LinearOp):
                             if n.name == 'time_embed_1' or n.name == 'time_embed_2' or n.name == 'temb_proj':
                                 if n.config.linear_reuse:
                                     pass
                                 else:
                                     continue
-                            elif n.latent_scale < n.config.latent_scale:
+                            elif n.latent_scale < n.config.latent_scale_linear:
                                 continue
-                        if isinstance(n, Conv2dAddBiasActivateOp) and n.latent_scale < n.config.latent_scale:
+                        if isinstance(n, Conv2dAddBiasActivateOp) and n.latent_scale < n.config.latent_scale_conv:
                             continue
                         if isinstance(n, Attention):
-                            continue
-                        n.outdeg -= 1
+                            if n.config.fuse_attn1_attn2_ff:
+                                continue
+                            elif n.latent_scale < n.config.latent_scale_attn:
+                                continue
                         if n.outdeg == 0 and n.round >= n.limit_1 and n.round < n.limit_2:
                             cur_stream.sync()
                             arr_map[n].async_h2d(

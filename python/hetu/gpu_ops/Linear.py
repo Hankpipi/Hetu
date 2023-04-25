@@ -90,7 +90,7 @@ class LinearOp(Op):
                 return
             
             if len(input_vals[0].shape) == 3 and input_vals[0].shape[-2] != 77 and self.use_sparse and \
-                self.round >= self.limit_1 and self.round < self.limit_2 and self.latent_scale >= self.config.latent_scale:
+                self.round >= self.limit_1 and self.round < self.limit_2 and self.latent_scale >= self.config.latent_scale_linear:
                 
                 B, L, input_channel = input_vals[0].shape
                 output_channel = output_val.shape[-1]
@@ -100,17 +100,9 @@ class LinearOp(Op):
                     else:
                         mask = self.mask
                     width = int(math.sqrt(output_val.shape[-2]))
-                    rate = 96 // width
-
-                    mask = torch.nn.functional.interpolate(
-                        mask.repeat(B, 1, 1, 1), size=(96, 96)
-                    )
-                    
-                    mask = torch.nn.MaxPool2d(kernel_size=rate)(mask.float())
+                    mask = torch.nn.MaxPool2d(kernel_size=(mask.shape[-2] // width, mask.shape[-1] // width))(mask.float().repeat(B, 1, 1, 1)) 
                     mask = (mask > 0.5)
-
                     mask = mask.numpy().reshape(-1)
-
                     index = np.where(mask == True)
                     index = ht.array(index[0], ctx=ctx)
                     LinearOp.index_pool[L] = index
