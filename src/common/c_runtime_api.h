@@ -757,7 +757,8 @@ HETUSYS_EXTERN_C {
                     DLArrayHandle matC, DLArrayHandle index,
                     DLArrayHandle matA_sparse, DLArrayHandle matC_sparse,
                     DLArrayHandle scale, DLArrayHandle shift,
-                    const float eps, const int activation_mode,
+                    const float eps, DLArrayHandle add,
+                    const int activation_mode,
                     DLStreamHandle stream_handle);
 
     int DLGpuLinearQKV(const DLArrayHandle matA, bool transposeA,

@@ -66,9 +66,10 @@ __global__ void gather_kernel(const float *input, const float *index,
     output[ind] = input[ind_new];
 }
 
-// Fuse gelu_half in it.
+// Fuse gelu_half and addop in it.
 __global__ void scatter_kernel(float* target_data, const float* index_data,
-                               const float* src_data, size_t size, int col,
+                               const float* src_data, const float* add_data,
+                               size_t size, int col,
                                int activation_mode) {
     size_t ind = blockIdx.x * blockDim.x + threadIdx.x;
     if (ind >= size)
@@ -82,6 +83,10 @@ __global__ void scatter_kernel(float* target_data, const float* index_data,
     // half_gelu
     if (activation_mode == 1 && nc >= (col / 2))
         ans = ans * 0.5f * (1.0f + erff(ans * SQRT_1_2));
+
+    // addop
+    if (add_data != NULL)
+        ans += add_data[ind_new];
 
     target_data[ind_new] = ans;
 }
@@ -167,7 +172,8 @@ int DLGpuLinearSparse(const DLArrayHandle matA, bool transposeA,
                 DLArrayHandle matC, DLArrayHandle index,
                 DLArrayHandle matA_sparse, DLArrayHandle matC_sparse,
                 DLArrayHandle scale = NULL, DLArrayHandle shift = NULL,
-                const float eps = 0, const int activation_mode = 0,
+                const float eps = 0, DLArrayHandle add = NULL,
+                const int activation_mode = 0,
                 DLStreamHandle stream_handle = NULL) {
     // cublas assume matrix is column major
     assert(matB->ndim == 2);
@@ -276,10 +282,12 @@ int DLGpuLinearSparse(const DLArrayHandle matA, bool transposeA,
     if(stream_handle){
         scatter_kernel<<<blocks, threads, 0, *s>>>(
             (float *)matC->data, (const float *)index->data, (const float *)matC_sparse->data, 
+            add == NULL ? NULL : (const float *)add->data,  
             size, col, activation_mode);
     }else{
         scatter_kernel<<<blocks, threads>>>(
             (float *)matC->data, (const float *)index->data, (const float *)matC_sparse->data, 
+            add == NULL ? NULL : (const float *)add->data, 
             size, col, activation_mode);
     }
     return 0;

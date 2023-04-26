@@ -10,6 +10,9 @@ from ..gpu_links import layer_normalization, matmul_with_bias, matmul_qkv, \
                         gather_for_linear, scatter_for_linear, scatter_add_for_linear, matrix_slice_simple
 
 class Attention(Op):
+
+    profile_dict = {}
+
     def __init__(self, node_A, attention, state, encoder_hidden_states=None, config=None, ctx=None):
         self.mask = None
         self.limit_1 = None
@@ -83,6 +86,7 @@ class Attention(Op):
         # sparse config
         self.d2h_stream = None
         self.output_cache = []
+        self.should_init_cache = True
 
 
     def build_sparse(self, input_vals, output_val):
@@ -117,6 +121,7 @@ class Attention(Op):
 
 
     def compute_sparse(self, input_vals, output_val, stream_handle=None):
+        # print("Sparse Attn:", "input", input_vals[0].shape, "output", output_val.shape)
         self.build_sparse(input_vals, output_val)
 
         # Gather + LayerNorm: input -> input_sparse.
@@ -179,7 +184,10 @@ class Attention(Op):
         if self.config.fuse_attn1_attn2_ff:
             scatter_add_for_linear(self.output_sparse, input_vals[0], output_val, self.index, stream=stream_handle)
         else:
-            self.event.sync()
+            if self.cache_ctx == self.ctx:
+                self.output_cache[self.round].copyto(output_val)
+            elif self.cache_ctx == cpu():
+                self.event.sync()
             scatter_for_linear(self.output_sparse, output_val, self.index, merge_rate=self.config.merge_rate, stream=stream_handle)
             matrix_elementwise_add(output_val, input_vals[0], output_val, stream=stream_handle)
 
@@ -189,8 +197,6 @@ class Attention(Op):
     def compute(self, input_vals, output_val, stream_handle=None):
         if self.on_cpu:
             raise NotImplementedError
-        if self.latent_scale == 0:
-            self.latent_scale = input_vals[0].shape[1]
         if self.use_sparse and self.round >= self.limit_1 and self.round < self.limit_2 and self.latent_scale >= self.config.latent_scale_attn:
             self.compute_sparse(input_vals, output_val, stream_handle)
             return 
@@ -230,7 +236,9 @@ class Attention(Op):
         matmul_with_bias(self.hidden_states, False, self.attn_to_out_weights, True, 
                         self.attn_to_out_bias, output_val, stream=stream_handle)
         
-        if self.config.fuse_attn1_attn2_ff == False and self.use_sparse == False and self.d2h_stream is not None:
+        if not self.use_sparse and self.cache_ctx == self.ctx:
+            output_val.copyto(self.output_cache[self.round])
+        elif self.use_sparse == False and self.cache_ctx == cpu() and self.d2h_stream is not None:
             self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 
         # Add: output + input -> output.
@@ -256,6 +264,7 @@ class Attention(Op):
             self.qkv = empty((B, L, self.attn_weights_qkv.shape[0]), ctx=self.ctx)
         self.hidden_states = empty((B, L, self.attn_weights_v.shape[0]), ctx=self.ctx)
         self.output_shape = (B, L, self.attn_to_out_weights.shape[0])
+        self.latent_scale = input_shapes[0][1]
         return self.output_shape
 
 

@@ -8,25 +8,31 @@ import torch
 import hetu as ht
 from .Node import Op
 from .._base import DNNL_LIB
-from ..gpu_links import matmul_with_bias, matmul_with_bias_sparse, layer_normalization, gelu_half
+from ..gpu_links import matmul_with_bias, matmul_with_bias_sparse, layer_normalization, gelu_half, matrix_elementwise_add
 
 
 class LinearOp(Op):
+
+    profile_dict = {}
 
     index_pool = {}
     input_pool = {}
     output_pool = {}
 
     def __init__(self, node_A, node_B, bias, trans_A=False, trans_B=False, name=None,
-                 activation_mode=0, ln_weight=None, ln_bias=None, eps=0.01, config=None, ctx=None):
+                 activation_mode=0, add=None, ln_weight=None, ln_bias=None, eps=0.01, config=None, ctx=None):
         self.mask = None
         self.limit_1 = None
         self.limit_2 = None
         self.config = config
-        if ln_weight == None:
+        if ln_weight == None and add == None:
             super().__init__(LinearOp, [node_A, node_B, bias], ctx)
-        else:
+        if ln_weight != None and add == None:
             super().__init__(LinearOp, [node_A, node_B, bias, ln_weight, ln_bias], ctx)
+        if ln_weight == None and add != None:
+            super().__init__(LinearOp, [node_A, node_B, bias, add], ctx)
+        if ln_weight != None and add != None:
+            super().__init__(LinearOp, [node_A, node_B, bias, ln_weight, ln_bias, add], ctx)
 
         # Linear
         self.name = name
@@ -38,6 +44,7 @@ class LinearOp(Op):
         self.use_sparse = False
         self.d2h_stream = None
         self.output_cache = []
+        self.should_init_cache = True
 
         # Activation
         # 0 stands for Identity function.
@@ -50,6 +57,9 @@ class LinearOp(Op):
         self.ln_output = None
         self.fuse_ln = (ln_weight != None)
         self.eps = eps
+
+        # AddOp
+        self.fuse_add = (add != None)
 
         # CrossAttn key and value reuse.
         self.reuse = None
@@ -81,8 +91,6 @@ class LinearOp(Op):
                 return 
             
             ctx = input_vals[0].ctx
-            if self.latent_scale == 0:
-                self.latent_scale = input_vals[0].shape[1]
             
             if self.use_sparse and (self.name == 'time_embed_1' or self.name == 'time_embed_2' or self.name == 'temb_proj') and self.config.linear_reuse:
                 self.event.sync()
@@ -91,7 +99,7 @@ class LinearOp(Op):
             
             if len(input_vals[0].shape) == 3 and input_vals[0].shape[-2] != 77 and self.use_sparse and \
                 self.round >= self.limit_1 and self.round < self.limit_2 and self.latent_scale >= self.config.latent_scale_linear:
-                
+                # print("Sparse Linear:", self.name, "input", input_vals[0].shape, "output", output_val.shape)
                 B, L, input_channel = input_vals[0].shape
                 output_channel = output_val.shape[-1]
                 if L not in LinearOp.index_pool:
@@ -125,19 +133,29 @@ class LinearOp(Op):
                     output_sparse = ht.empty(output_shape, ctx=ctx)
                     LinearOp.output_pool[output_shape] = output_sparse
 
-                self.event.sync()
+                if self.cache_ctx == self.ctx:
+                    self.output_cache[self.round].copyto(output_val)
+                elif self.cache_ctx == ht.cpu():
+                    self.event.sync()
+
                 ln_scale_curr = None
                 ln_shift_curr = None 
+                add_curr = None
                 if self.fuse_ln:
                     ln_scale_curr = input_vals[3]
                     ln_shift_curr = input_vals[4]
+                if self.fuse_add:
+                    if self.fuse_ln:
+                        add_curr = input_vals[5]
+                    else:
+                        add_curr = input_vals[3]
 
                 matmul_with_bias_sparse(
                     input_vals[0], self.matmul_attr_trans_A,
                     input_vals[1], self.matmul_attr_trans_B, input_vals[2],
                     output_val, index, input_sparse, output_sparse, 
                     ln_scale_curr, ln_shift_curr, self.eps, 
-                    self.activation_mode, stream_handle)
+                    add_curr, self.activation_mode, stream_handle)
             else:
                 # Fuse LN
                 if self.fuse_ln:
@@ -162,7 +180,16 @@ class LinearOp(Op):
                 if self.activation_mode == 1:
                     gelu_half(output_val, output_val, stream_handle)
 
-                if not self.use_sparse and self.d2h_stream is not None:
+                # Fuse add_op
+                if self.fuse_add:
+                    if self.fuse_ln:
+                        matrix_elementwise_add(output_val, input_vals[5], output_val, stream_handle)
+                    else:
+                        matrix_elementwise_add(output_val, input_vals[3], output_val, stream_handle)
+
+                if not self.use_sparse and self.cache_ctx == self.ctx:
+                    output_val.copyto(self.output_cache[self.round])
+                elif not self.use_sparse and self.cache_ctx == ht.cpu() and self.d2h_stream is not None:
                     self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 
             if self.name == 'CrossAttn_k' or self.name == 'CrossAttn_v' and self.config.linear_reuse:
@@ -206,9 +233,13 @@ class LinearOp(Op):
         return [lhs_grad, rhs_grad, bias_grad]
 
     def infer_shape(self, input_shapes):
-        if self.fuse_ln:
+        if self.fuse_ln and self.fuse_add:
+            assert len(input_shapes) == 6
+        if self.fuse_ln and not self.fuse_add:
             assert len(input_shapes) == 5
-        else:
+        if not self.fuse_ln and self.fuse_add:
+            assert len(input_shapes) == 4
+        if not self.fuse_ln and not self.fuse_add:
             assert len(input_shapes) == 3
         assert len(input_shapes[1]) == 2
         assert len(input_shapes[2]) == 1
@@ -224,11 +255,12 @@ class LinearOp(Op):
             shape_B = (B[0], )
         assert bias_shape == shape_B
         self.output_shape = shape_A + shape_B
+        self.latent_scale = input_shapes[0][1]
         return shape_A + shape_B
 
 
 def linear_op(node_A, node_B, bias, trans_A=False, trans_B=False, name=None,
-              activation_mode=0, ln_weight=None, ln_bias=None, eps=0.01, config=None, ctx=None):
+              activation_mode=0, add=None, ln_weight=None, ln_bias=None, eps=0.01, config=None, ctx=None):
     """Make a new instance of Matrix Multiplication with bias and call the instance.
 
     Parameters:
@@ -250,4 +282,4 @@ def linear_op(node_A, node_B, bias, trans_A=False, trans_B=False, name=None,
 
     """
     return LinearOp(node_A, node_B, bias, trans_A, trans_B, name,
-                    activation_mode, ln_weight, ln_bias, eps, config=config, ctx=ctx)
+                    activation_mode, add, ln_weight, ln_bias, eps, config=config, ctx=ctx)

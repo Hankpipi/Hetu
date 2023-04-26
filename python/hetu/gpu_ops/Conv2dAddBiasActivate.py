@@ -9,13 +9,18 @@ from .ReduceSum import reduce_sum_op
 from ..gpu_links import CuDNN_conv2d_with_bias, CuDNN_conv2d_with_bias_sparse, group_normalization, \
                         silu, norm_silu
 
+import time
+
 
 class Conv2dAddBiasActivateOp(Op):
+
+    profile_dict = {}
 
     workspace_cache = {}
 
     def __init__(self, node_A, node_B, bias, padding=0, stride=1, activation_mode=0,
                 gn_weight=None, gn_bias=None, num_groups=32, eps=0.01, height=None, width=None, config=None, ctx=None):
+        self.op_name = node_B.name
         self.mask = None
         self.limit_1 = None
         self.limit_2 = None
@@ -34,14 +39,10 @@ class Conv2dAddBiasActivateOp(Op):
         self.stride = stride
 
         # Conv
-        if height is None or height <= 24:
-            self.block_division_h = 12
-            self.block_division_w = 12
-        else:
-            self.block_division_h = height // 2
-            self.block_division_w = width // 2
-            # self.block_division_h = 12
-            # self.block_division_w = 12
+        self.block_division_h = height // 2
+        self.block_division_w = width // 2
+        # self.block_division_h = 12
+        # self.block_division_w = 12
         self.latent_scale = height * width
 
         self.round = 0
@@ -52,6 +53,7 @@ class Conv2dAddBiasActivateOp(Op):
         self.scale = None
         self.shift = None
         self.output_cache = []
+        self.should_init_cache = True
         self.latent_scale = 0
 
         # Activation
@@ -114,6 +116,7 @@ class Conv2dAddBiasActivateOp(Op):
 
 
     def compute_edit(self, input_vals, output_val, stream_handle=None):
+        # print("Sparse Conv:", self.fuse_gn, "input", input_vals[0].shape, "kernel", input_vals[1].shape, "output", output_val.shape)
         ctx = input_vals[0].ctx
         in_N, in_C, in_H, in_W = input_vals[0].shape
         filter_out_C, filter_in_C, filter_H, filter_W = input_vals[1].shape
@@ -171,15 +174,23 @@ class Conv2dAddBiasActivateOp(Op):
                                     gather_index, gather_map, overlapped_block_h, overlapped_block_w, block_sum)
             else:
                 Conv2dAddBiasActivateOp.workspace_cache[key] = 'origin'
+        
+        value = Conv2dAddBiasActivateOp.workspace_cache[key]
 
-        self.event.sync()
+        if self.config.profile:
+            time_start = time.time()
+
+        if self.cache_ctx == self.ctx:
+            self.output_cache[self.round].copyto(output_val)
+        elif self.cache_ctx == ht.cpu():
+            self.event.sync()
+
         # Also need to load the scale & shift of the GN layer.
         scale, shift = None, None
         if self.fuse_gn:
             scale = self.gn_scale_cache[self.round]
             shift = self.gn_shift_cache[self.round]
         
-        value = Conv2dAddBiasActivateOp.workspace_cache[key]
         if value == 'origin':
             gn_output = input_vals[0]
             if self.fuse_gn:
@@ -201,6 +212,15 @@ class Conv2dAddBiasActivateOp(Op):
                 overlapped_block_h, overlapped_block_w, 
                 gather_map, scatter_map, self.padding, self.stride,
                 self.activation_mode, scale, shift, stream_handle)
+
+        if self.config.profile:
+            time_end = time.time()
+            time_elapse = time_end - time_start
+            time_key = (self.op_name, self.latent_scale)
+            if time_key not in Conv2dAddBiasActivateOp.profile_dict:
+                Conv2dAddBiasActivateOp.profile_dict[time_key] = time_elapse
+            else:
+                Conv2dAddBiasActivateOp.profile_dict[time_key] += time_elapse
 
         self.round += 1
 
@@ -259,7 +279,9 @@ class Conv2dAddBiasActivateOp(Op):
         CuDNN_conv2d_with_bias(gn_output, input_vals[1], input_vals[2],
                         output_val, self.padding, self.stride, stream_handle)
 
-        if not self.use_sparse and self.d2h_stream is not None:
+        if not self.use_sparse and self.cache_ctx == self.ctx:
+            output_val.copyto(self.output_cache[self.round])
+        elif not self.use_sparse and self.cache_ctx == ht.cpu() and self.d2h_stream is not None:
             self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 
         self.round += 1
