@@ -9,7 +9,8 @@ from .ReduceSum import reduce_sum_op
 from ..gpu_links import CuDNN_conv2d_with_bias, CuDNN_conv2d_with_bias_sparse, group_normalization, \
                         silu, norm_silu
 
-import time
+from timeit import default_timer as timer
+import pickle
 
 
 class Conv2dAddBiasActivateOp(Op):
@@ -54,7 +55,6 @@ class Conv2dAddBiasActivateOp(Op):
         self.shift = None
         self.output_cache = []
         self.should_init_cache = True
-        self.latent_scale = 0
 
         # Activation
         # 0 stands for Identity function.
@@ -178,12 +178,14 @@ class Conv2dAddBiasActivateOp(Op):
         value = Conv2dAddBiasActivateOp.workspace_cache[key]
 
         if self.config.profile:
-            time_start = time.time()
+            torch.cuda.synchronize() 
+            time_start = timer()
 
-        if self.cache_ctx == self.ctx:
-            self.output_cache[self.round].copyto(output_val)
-        elif self.cache_ctx == ht.cpu():
-            self.event.sync()
+        if not self.config.turn_off_h2d:
+            if self.cache_ctx == self.ctx:
+                self.output_cache[self.round].copyto(output_val)
+            elif self.cache_ctx == ht.cpu():
+                self.event.sync()
 
         # Also need to load the scale & shift of the GN layer.
         scale, shift = None, None
@@ -213,16 +215,23 @@ class Conv2dAddBiasActivateOp(Op):
                 gather_map, scatter_map, self.padding, self.stride,
                 self.activation_mode, scale, shift, stream_handle)
 
-        if self.config.profile:
-            time_end = time.time()
+        if self.config.profile:  
+            torch.cuda.synchronize() 
+            time_end = timer()
             time_elapse = time_end - time_start
             time_key = (self.op_name, self.latent_scale)
             if time_key not in Conv2dAddBiasActivateOp.profile_dict:
                 Conv2dAddBiasActivateOp.profile_dict[time_key] = time_elapse
             else:
                 Conv2dAddBiasActivateOp.profile_dict[time_key] += time_elapse
+            if self.round == self.limit_2 - 1:
+                f_save = open('profile_conv.pkl', 'wb')
+                pickle.dump(Conv2dAddBiasActivateOp.profile_dict, f_save)
+                f_save.close()
 
         self.round += 1
+
+
 
     def compute(self, input_vals, output_val, stream_handle=None):
         ctx = input_vals[0].ctx

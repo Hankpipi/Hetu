@@ -1075,7 +1075,7 @@ class SubExecutor(object):
                         elif node.latent_scale < node.config.latent_scale_attn:
                             continue
                     # May implement more flexible strategies here. Some cpu and some gpu.
-                    # We put conv_out_w to gpu (it can't load from cpu since it is the last op in UNet).
+                    # For example, we put conv_out_w to gpu.
                     if isinstance(node, Conv2dAddBiasActivateOp) and node.op_name == 'conv_out_w':
                         node.cache_ctx = node.ctx
                     else:

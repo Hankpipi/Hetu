@@ -9,11 +9,15 @@ from ..gpu_links import layer_normalization, matmul_with_bias, matmul_qkv, \
                         fused_multi_head_attention, matrix_elementwise_add, \
                         gather_for_linear, scatter_for_linear, scatter_add_for_linear, matrix_slice_simple
 
+from timeit import default_timer as timer
+import pickle
+
 class Attention(Op):
 
     profile_dict = {}
 
     def __init__(self, node_A, attention, state, encoder_hidden_states=None, config=None, ctx=None):
+        self.op_name = 'cross_attn' if encoder_hidden_states != None else 'self_attn'
         self.mask = None
         self.limit_1 = None
         self.limit_2 = None
@@ -124,6 +128,10 @@ class Attention(Op):
         # print("Sparse Attn:", "input", input_vals[0].shape, "output", output_val.shape)
         self.build_sparse(input_vals, output_val)
 
+        if self.config.profile:
+            torch.cuda.synchronize() 
+            time_start = timer()
+
         # Gather + LayerNorm: input -> input_sparse.
         gather_for_linear(input_vals[0], self.index, self.input_sparse, self.ln_weights, 
                          self.ln_bias, self.ln_eps, stream=stream_handle)
@@ -184,12 +192,28 @@ class Attention(Op):
         if self.config.fuse_attn1_attn2_ff:
             scatter_add_for_linear(self.output_sparse, input_vals[0], output_val, self.index, stream=stream_handle)
         else:
-            if self.cache_ctx == self.ctx:
-                self.output_cache[self.round].copyto(output_val)
-            elif self.cache_ctx == cpu():
-                self.event.sync()
+            if not self.config.turn_off_h2d:
+                if self.cache_ctx == self.ctx:
+                    self.output_cache[self.round].copyto(output_val)
+                elif self.cache_ctx == cpu():
+                    self.event.sync()
             scatter_for_linear(self.output_sparse, output_val, self.index, merge_rate=self.config.merge_rate, stream=stream_handle)
             matrix_elementwise_add(output_val, input_vals[0], output_val, stream=stream_handle)
+
+        
+        if self.config.profile:
+            torch.cuda.synchronize()
+            time_end = timer()
+            time_elapse = time_end - time_start
+            time_key = (self.op_name, self.latent_scale)
+            if time_key not in Attention.profile_dict:
+                Attention.profile_dict[time_key] = time_elapse
+            else:
+                Attention.profile_dict[time_key] += time_elapse
+            if self.round == self.limit_2 - 1:
+                f_save = open('profile_attention.pkl', 'wb')
+                pickle.dump(Attention.profile_dict, f_save)
+                f_save.close()
 
         self.round += 1
 
@@ -200,6 +224,10 @@ class Attention(Op):
         if self.use_sparse and self.round >= self.limit_1 and self.round < self.limit_2 and self.latent_scale >= self.config.latent_scale_attn:
             self.compute_sparse(input_vals, output_val, stream_handle)
             return 
+
+        if self.config.profile:
+            torch.cuda.synchronize() 
+            time_start = timer()
 
         # LayerNorm: input -> input_buffer.
         if self.ln_mean is None:
@@ -244,6 +272,19 @@ class Attention(Op):
         # Add: output + input -> output.
         matrix_elementwise_add(output_val, input_vals[0], output_val, stream=stream_handle)
         
+        if self.config.profile and self.use_sparse and self.round >= self.limit_1 and self.round < self.limit_2:
+            torch.cuda.synchronize()
+            time_end = timer()
+            time_elapse = time_end - time_start
+            time_key = (self.op_name, self.latent_scale)
+            if time_key not in Attention.profile_dict:
+                Attention.profile_dict[time_key] = time_elapse
+            else:
+                Attention.profile_dict[time_key] += time_elapse
+            if self.round == self.limit_2 - 1:
+                f_save = open('profile_attention.pkl', 'wb')
+                pickle.dump(Attention.profile_dict, f_save)
+                f_save.close()
 
         self.round += 1
         # print (self.is_cross_attn, self.round)

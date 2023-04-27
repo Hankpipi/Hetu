@@ -10,6 +10,8 @@ from .Node import Op
 from .._base import DNNL_LIB
 from ..gpu_links import matmul_with_bias, matmul_with_bias_sparse, layer_normalization, gelu_half, matrix_elementwise_add
 
+from timeit import default_timer as timer
+import pickle
 
 class LinearOp(Op):
 
@@ -21,6 +23,7 @@ class LinearOp(Op):
 
     def __init__(self, node_A, node_B, bias, trans_A=False, trans_B=False, name=None,
                  activation_mode=0, add=None, ln_weight=None, ln_bias=None, eps=0.01, config=None, ctx=None):
+        self.op_name = node_B.name
         self.mask = None
         self.limit_1 = None
         self.limit_2 = None
@@ -133,10 +136,16 @@ class LinearOp(Op):
                     output_sparse = ht.empty(output_shape, ctx=ctx)
                     LinearOp.output_pool[output_shape] = output_sparse
 
-                if self.cache_ctx == self.ctx:
-                    self.output_cache[self.round].copyto(output_val)
-                elif self.cache_ctx == ht.cpu():
-                    self.event.sync()
+                if self.config.profile:
+                    torch.cuda.synchronize() 
+                    time_start = timer()
+
+                if not self.config.turn_off_h2d:
+                    if self.cache_ctx == self.ctx:
+                        self.output_cache[self.round].copyto(output_val)
+                    elif self.cache_ctx == ht.cpu():
+                        self.event.sync()
+                
 
                 ln_scale_curr = None
                 ln_shift_curr = None 
@@ -156,7 +165,27 @@ class LinearOp(Op):
                     output_val, index, input_sparse, output_sparse, 
                     ln_scale_curr, ln_shift_curr, self.eps, 
                     add_curr, self.activation_mode, stream_handle)
+                
+                if self.config.profile:
+                    torch.cuda.synchronize()
+                    time_end = timer()
+                    time_elapse = time_end - time_start
+                    time_key = (self.op_name, self.latent_scale)
+                    if time_key not in LinearOp.profile_dict:
+                        LinearOp.profile_dict[time_key] = time_elapse
+                    else:
+                        LinearOp.profile_dict[time_key] += time_elapse
+                    if self.round == self.limit_2 - 1:
+                        f_save = open('profile_linear.pkl', 'wb')
+                        pickle.dump(LinearOp.profile_dict, f_save)
+                        f_save.close()
+
             else:
+
+                if self.config.profile:
+                    torch.cuda.synchronize() 
+                    time_start = timer()
+
                 # Fuse LN
                 if self.fuse_ln:
                     if self.mean is None:
@@ -186,6 +215,21 @@ class LinearOp(Op):
                         matrix_elementwise_add(output_val, input_vals[5], output_val, stream_handle)
                     else:
                         matrix_elementwise_add(output_val, input_vals[3], output_val, stream_handle)
+
+                if self.config.profile and len(input_vals[0].shape) == 3 and input_vals[0].shape[-2] != 77 and self.use_sparse and \
+                                                                        self.round >= self.limit_1 and self.round < self.limit_2:   
+                    torch.cuda.synchronize()
+                    time_end = timer()
+                    time_elapse = time_end - time_start
+                    time_key = (self.op_name, self.latent_scale)
+                    if time_key not in LinearOp.profile_dict:
+                        LinearOp.profile_dict[time_key] = time_elapse
+                    else:
+                        LinearOp.profile_dict[time_key] += time_elapse
+                    if self.round == self.limit_2 - 1:
+                        f_save = open('profile_linear.pkl', 'wb')
+                        pickle.dump(LinearOp.profile_dict, f_save)
+                        f_save.close()
 
                 if not self.use_sparse and self.cache_ctx == self.ctx:
                     output_val.copyto(self.output_cache[self.round])
