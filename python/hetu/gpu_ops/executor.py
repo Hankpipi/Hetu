@@ -571,7 +571,7 @@ class Executor(object):
                         node.built = False
                     node.use_sparse = False
                     node.limit_1 = 10 if mask is None else 0
-                    node.limit_2 = 50 if mask is None else 50  
+                    node.limit_2 = 50 if mask is None else 40  
                     if isinstance(node, LinearOp) and (node.name == 'time_embed_1' or node.name == 'time_embed_2' or node.name == 'temb_proj'):
                         node.limit_1 = 0 
                         node.limit_2 = 50        
@@ -583,6 +583,45 @@ class Executor(object):
                     if not save_checkpoint and node.round == 50:
                         node.use_sparse = True     
                     node.round = 0
+
+
+    def init_cache(self):
+        for e in self.subexecutor.values():
+            for node in e.computing_nodes:
+                if isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
+                    # Init the node.output_cache (only once).
+                    if node.should_init_cache:
+                        node.should_init_cache = False
+                        # Don't need any output_cache by default.
+                        node.cache_ctx = None
+                        if isinstance(node, LinearOp):
+                            if node.name == 'time_embed_1' or node.name == 'time_embed_2' or node.name == 'temb_proj':
+                                if node.config.linear_reuse:
+                                    pass
+                                else:
+                                    continue
+                            elif node.latent_scale < node.config.latent_scale_linear:
+                                continue
+                        if isinstance(node, Conv2dAddBiasActivateOp) and node.latent_scale < node.config.latent_scale_conv:
+                            continue
+                        if isinstance(node, Attention):
+                            if node.config.fuse_attn1_attn2_ff:
+                                continue
+                            elif node.latent_scale < node.config.latent_scale_attn:
+                                continue
+                        # May implement more flexible strategies here. Some cpu and some gpu.
+                        # Note that we have to put conv_out_w conv to gpu.
+                        if isinstance(node, Conv2dAddBiasActivateOp) and node.op_name == 'conv_out_w':
+                            print(f'{node.op_name} output_cache is put on gpu.')
+                            node.cache_ctx = node.ctx
+                        # For example, we could also put the GEGLU linear to gpu.
+                        elif isinstance(node, LinearOp) and node.op_name[:7] == 'GEGLU_6':
+                            print(f'{node.op_name} output_cache is put on gpu.')
+                            node.cache_ctx = node.ctx
+                        else:
+                            node.cache_ctx = ndarray.cpu()
+                        for i in range(50):
+                            node.output_cache.append(ndarray.empty(node.output_shape, node.cache_ctx))
 
 
     def __del__(self) -> None:
@@ -1008,6 +1047,11 @@ class SubExecutor(object):
             self.infer_shape(feed_shapes)
             self.memory_plan()
 
+        for node in self.computing_nodes:
+            if isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
+                if node.cache_ctx == node.ctx:
+                    self.node_to_arr_map[node] = node.output_cache[node.round]
+
         self.compute(self.computing_nodes,
                      self.node_to_arr_map)
 
@@ -1053,35 +1097,6 @@ class SubExecutor(object):
             grouping_nodes.clear()
 
         for node in computing_nodes:
-            if isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
-                # Init the node.output_cache (only once).
-                if node.should_init_cache:
-                    node.should_init_cache = False
-                    # Don't need any output_cache by default.
-                    node.cache_ctx = None
-                    if isinstance(node, LinearOp):
-                        if node.name == 'time_embed_1' or node.name == 'time_embed_2' or node.name == 'temb_proj':
-                            if node.config.linear_reuse:
-                                pass
-                            else:
-                                continue
-                        elif node.latent_scale < node.config.latent_scale_linear:
-                            continue
-                    if isinstance(node, Conv2dAddBiasActivateOp) and node.latent_scale < node.config.latent_scale_conv:
-                        continue
-                    if isinstance(node, Attention):
-                        if node.config.fuse_attn1_attn2_ff:
-                            continue
-                        elif node.latent_scale < node.config.latent_scale_attn:
-                            continue
-                    # May implement more flexible strategies here. Some cpu and some gpu.
-                    # For example, we put conv_out_w to gpu.
-                    if isinstance(node, Conv2dAddBiasActivateOp) and node.op_name == 'conv_out_w':
-                        node.cache_ctx = node.ctx
-                    else:
-                        node.cache_ctx = ndarray.cpu()
-                    for i in range(50):
-                        node.output_cache.append(ndarray.empty(node.output_shape, node.cache_ctx))
             for n in node.inputs:
                 if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
                     n.outdeg += 1

@@ -22,6 +22,7 @@ class Conv2dAddBiasActivateOp(Op):
     def __init__(self, node_A, node_B, bias, padding=0, stride=1, activation_mode=0,
                 gn_weight=None, gn_bias=None, num_groups=32, eps=0.01, height=None, width=None, config=None, ctx=None):
         self.op_name = node_B.name
+        self.cache_ctx = None
         self.mask = None
         self.limit_1 = None
         self.limit_2 = None
@@ -183,7 +184,8 @@ class Conv2dAddBiasActivateOp(Op):
 
         if not self.config.turn_off_h2d:
             if self.cache_ctx == self.ctx:
-                self.output_cache[self.round].copyto(output_val)
+                pass
+                # self.output_cache[self.round].copyto(output_val)
             elif self.cache_ctx == ht.cpu():
                 self.event.sync()
 
@@ -289,7 +291,8 @@ class Conv2dAddBiasActivateOp(Op):
                         output_val, self.padding, self.stride, stream_handle)
 
         if not self.use_sparse and self.cache_ctx == self.ctx:
-            output_val.copyto(self.output_cache[self.round])
+            pass
+            # output_val.copyto(self.output_cache[self.round])
         elif not self.use_sparse and self.cache_ctx == ht.cpu() and self.d2h_stream is not None:
             self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 

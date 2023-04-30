@@ -158,6 +158,8 @@ HETUSYS_EXTERN_C {
     int DLGpuGatherForLinear(const DLArrayHandle input, DLArrayHandle output,
                         DLArrayHandle index, DLArrayHandle scale, DLArrayHandle shift,
                         const float eps, DLStreamHandle stream_handle);
+    int DLGpuGatherForLinearSimple(const DLArrayHandle input, DLArrayHandle output,
+                        DLArrayHandle index, DLStreamHandle stream_handle);
     int DLGpuMaskedFill(const DLArrayHandle input, const DLArrayHandle mask,
                         float val, DLArrayHandle output,
                         DLStreamHandle stream_handle);

@@ -7,7 +7,8 @@ from ..ndarray import array, empty, cpu
 from .Node import Op
 from ..gpu_links import layer_normalization, matmul_with_bias, matmul_qkv, \
                         fused_multi_head_attention, matrix_elementwise_add, \
-                        gather_for_linear, scatter_for_linear, scatter_add_for_linear, matrix_slice_simple
+                        gather_for_linear, gather_for_linear_simple, \
+                        scatter_for_linear, scatter_add_for_linear
 
 from timeit import default_timer as timer
 import pickle
@@ -18,6 +19,7 @@ class Attention(Op):
 
     def __init__(self, node_A, attention, state, encoder_hidden_states=None, config=None, ctx=None):
         self.op_name = 'cross_attn' if encoder_hidden_states != None else 'self_attn'
+        self.cache_ctx = None
         self.mask = None
         self.limit_1 = None
         self.limit_2 = None
@@ -117,9 +119,13 @@ class Attention(Op):
             self.k_sparse = None
             self.v_sparse = None
         else:
-            self.k_sparse = empty(BL_sparse + (self.attn_weights_k.shape[0], ), ctx=ctx)
-            self.v_sparse = empty(BL_sparse + (self.attn_weights_v.shape[0], ), ctx=ctx)
-            self.qkv_sparse = empty(BL_sparse + (self.attn_weights_qkv.shape[0], ), ctx=ctx)
+            if self.config.radical:
+                self.k_sparse = empty(BL_sparse + (self.attn_weights_k.shape[0], ), ctx=ctx)
+                self.v_sparse = empty(BL_sparse + (self.attn_weights_v.shape[0], ), ctx=ctx)
+                self.qkv_sparse = empty(BL_sparse + (self.attn_weights_qkv.shape[0], ), ctx=ctx)
+            else:
+                self.k_sparse = empty((B, L) + (self.attn_weights_k.shape[0], ), ctx=ctx)
+                self.v_sparse = empty((B, L) + (self.attn_weights_v.shape[0], ), ctx=ctx)
         self.hidden_states_sparse = empty(BL_sparse + (self.attn_weights_v.shape[0], ), ctx=ctx)
         self.output_sparse = empty(BL_sparse + (self.attn_to_out_weights.shape[0], ), ctx=ctx)
 
@@ -133,8 +139,13 @@ class Attention(Op):
             time_start = timer()
 
         # Gather + LayerNorm: input -> input_sparse.
-        gather_for_linear(input_vals[0], self.index, self.input_sparse, self.ln_weights, 
+        if self.config.radical:
+            gather_for_linear(input_vals[0], self.index, self.input_sparse, self.ln_weights, 
                          self.ln_bias, self.ln_eps, stream=stream_handle)
+        else:
+            layer_normalization(input_vals[0], self.ln_weights, self.ln_bias,
+                            self.ln_mean, self.ln_var, self.input_buffer, self.ln_eps, stream=stream_handle)
+            gather_for_linear_simple(self.input_buffer, self.index, self.input_sparse, stream=stream_handle)
         # Linear: input_sparse -> q_sparse, k_sparse, v_sparse.
         # CrossAttn
         if self.is_cross_attn:
@@ -150,38 +161,37 @@ class Attention(Op):
                                 self.attn_bias_v, self.v_sparse, stream=stream_handle)
         # SelfAttn
         else:
-            '''
-            matmul_with_bias(self.input_sparse, False, self.attn_weights_q, True, 
-                            self.attn_bias_q, self.q_sparse, stream=stream_handle)
-            matmul_with_bias(self.input_sparse, False, self.attn_weights_k, True, 
-                            self.attn_bias_k, self.k_sparse, stream=stream_handle)
-            matmul_with_bias(self.input_sparse, False, self.attn_weights_v, True, 
-                            self.attn_bias_v, self.v_sparse, stream=stream_handle)
-            '''
-            # Fuse qkv matmul.
-            matmul_qkv(self.input_sparse, False, self.attn_weights_qkv, True, self.attn_bias_qkv,
-                            self.qkv_sparse, self.q_sparse, self.k_sparse, self.v_sparse, stream=stream_handle)
-            
-            '''
-            matmul_with_bias(self.input_sparse, False, self.attn_weights_qkv, True, 
-                            self.attn_bias_qkv, self.qkv_sparse, stream=stream_handle)
-            if self.gpu_buf_q == None:
-                self.gpu_buf_q = array(
-                    [0, 0, 0, self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_q.shape[0]],
-                    ctx=self.ctx, data_type=np.uintc
-                    )
-                self.gpu_buf_k = array(
-                    [0, 0, self.attn_bias_q.shape[0], self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_k.shape[0]],
-                    ctx=self.ctx, data_type=np.uintc
-                    )
-                self.gpu_buf_v = array(
-                    [0, 0, self.attn_bias_q.shape[0] + self.attn_bias_k.shape[0], self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_v.shape[0]],
-                    ctx=self.ctx, data_type=np.uintc
-                    )
-            matrix_slice_simple(self.qkv_sparse, self.q_sparse, self.gpu_buf_q, stream=stream_handle)
-            matrix_slice_simple(self.qkv_sparse, self.k_sparse, self.gpu_buf_k, stream=stream_handle)
-            matrix_slice_simple(self.qkv_sparse, self.v_sparse, self.gpu_buf_v, stream=stream_handle)
-            '''
+            if not self.config.radical:
+                matmul_with_bias(self.input_sparse, False, self.attn_weights_q, True, 
+                                self.attn_bias_q, self.q_sparse, stream=stream_handle)
+                matmul_with_bias(self.input_buffer, False, self.attn_weights_k, True, 
+                                self.attn_bias_k, self.k_sparse, stream=stream_handle)
+                matmul_with_bias(self.input_buffer, False, self.attn_weights_v, True, 
+                                self.attn_bias_v, self.v_sparse, stream=stream_handle)
+            else:
+                # Fuse qkv matmul.
+                matmul_qkv(self.input_sparse, False, self.attn_weights_qkv, True, self.attn_bias_qkv,
+                                self.qkv_sparse, self.q_sparse, self.k_sparse, self.v_sparse, stream=stream_handle)
+                '''
+                matmul_with_bias(self.input_sparse, False, self.attn_weights_qkv, True, 
+                                self.attn_bias_qkv, self.qkv_sparse, stream=stream_handle)
+                if self.gpu_buf_q == None:
+                    self.gpu_buf_q = array(
+                        [0, 0, 0, self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_q.shape[0]],
+                        ctx=self.ctx, data_type=np.uintc
+                        )
+                    self.gpu_buf_k = array(
+                        [0, 0, self.attn_bias_q.shape[0], self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_k.shape[0]],
+                        ctx=self.ctx, data_type=np.uintc
+                        )
+                    self.gpu_buf_v = array(
+                        [0, 0, self.attn_bias_q.shape[0] + self.attn_bias_k.shape[0], self.qkv_sparse.shape[0], self.qkv_sparse.shape[1], self.qkv_sparse.shape[2], -1, -1, self.attn_bias_v.shape[0]],
+                        ctx=self.ctx, data_type=np.uintc
+                        )
+                matrix_slice_simple(self.qkv_sparse, self.q_sparse, self.gpu_buf_q, stream=stream_handle)
+                matrix_slice_simple(self.qkv_sparse, self.k_sparse, self.gpu_buf_k, stream=stream_handle)
+                matrix_slice_simple(self.qkv_sparse, self.v_sparse, self.gpu_buf_v, stream=stream_handle)
+                '''
         # Fused Attn: q_sparse, k_sparse, v_sparse -> hidden_states_sparse.
         fused_multi_head_attention(self.q_sparse, self.k_sparse, self.v_sparse,
                                   self.hidden_states_sparse, self.attn_heads, stream=stream_handle)
@@ -194,7 +204,8 @@ class Attention(Op):
         else:
             if not self.config.turn_off_h2d:
                 if self.cache_ctx == self.ctx:
-                    self.output_cache[self.round].copyto(output_val)
+                    pass
+                    # self.output_cache[self.round].copyto(output_val)
                 elif self.cache_ctx == cpu():
                     self.event.sync()
             scatter_for_linear(self.output_sparse, output_val, self.index, merge_rate=self.config.merge_rate, stream=stream_handle)
@@ -265,7 +276,8 @@ class Attention(Op):
                         self.attn_to_out_bias, output_val, stream=stream_handle)
         
         if not self.use_sparse and self.cache_ctx == self.ctx:
-            output_val.copyto(self.output_cache[self.round])
+            pass
+            # output_val.copyto(self.output_cache[self.round])
         elif self.use_sparse == False and self.cache_ctx == cpu() and self.d2h_stream is not None:
             self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 

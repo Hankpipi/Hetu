@@ -24,6 +24,7 @@ class LinearOp(Op):
     def __init__(self, node_A, node_B, bias, trans_A=False, trans_B=False, name=None,
                  activation_mode=0, add=None, ln_weight=None, ln_bias=None, eps=0.01, config=None, ctx=None):
         self.op_name = node_B.name
+        self.cache_ctx = None
         self.mask = None
         self.limit_1 = None
         self.limit_2 = None
@@ -142,7 +143,8 @@ class LinearOp(Op):
 
                 if not self.config.turn_off_h2d:
                     if self.cache_ctx == self.ctx:
-                        self.output_cache[self.round].copyto(output_val)
+                        pass
+                        # self.output_cache[self.round].copyto(output_val)
                     elif self.cache_ctx == ht.cpu():
                         self.event.sync()
                 
@@ -232,7 +234,8 @@ class LinearOp(Op):
                         f_save.close()
 
                 if not self.use_sparse and self.cache_ctx == self.ctx:
-                    output_val.copyto(self.output_cache[self.round])
+                    pass
+                    # output_val.copyto(self.output_cache[self.round])
                 elif not self.use_sparse and self.cache_ctx == ht.cpu() and self.d2h_stream is not None:
                     self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 
