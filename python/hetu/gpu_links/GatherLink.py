@@ -42,5 +42,5 @@ def gather_for_linear_simple(in_arr, index, out_arr, stream=None):
     assert isinstance(in_arr, _nd.NDArray)
     assert isinstance(index, _nd.NDArray)
     assert isinstance(out_arr, _nd.NDArray)
-    _LIB.DLGpuGatherForLinearBoth(in_arr.handle, out_arr.handle, index.handle,
+    _LIB.DLGpuGatherForLinearSimple(in_arr.handle, out_arr.handle, index.handle,
                      stream.handle if stream else None)

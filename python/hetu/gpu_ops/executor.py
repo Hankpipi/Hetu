@@ -595,15 +595,26 @@ class Executor(object):
                         # Don't need any output_cache by default.
                         node.cache_ctx = None
                         if isinstance(node, LinearOp):
+                            # No need to synchronize.
+                            continue
+                            '''
+                            shape = e.node_to_shape_map[node]
+                            if len(shape) != 3 or shape[-2] == 77:
+                                continue
                             if node.name == 'time_embed_1' or node.name == 'time_embed_2' or node.name == 'temb_proj':
                                 if node.config.linear_reuse:
                                     pass
                                 else:
                                     continue
-                            elif node.latent_scale < node.config.latent_scale_linear:
+                            '''
+                            if node.latent_scale < node.config.latent_scale_linear:
                                 continue
-                        if isinstance(node, Conv2dAddBiasActivateOp) and node.latent_scale < node.config.latent_scale_conv:
-                            continue
+                        if isinstance(node, Conv2dAddBiasActivateOp):
+                            # Only synchronize on conv1_w, conv2_w and conv_out_w.
+                            if node.op_name[-7:] != 'conv1_w' and node.op_name[-7:] != 'conv2_w' and node.op_name != 'conv_out_w':
+                                continue
+                            if node.latent_scale < node.config.latent_scale_conv:
+                                continue
                         if isinstance(node, Attention):
                             if node.config.fuse_attn1_attn2_ff:
                                 continue

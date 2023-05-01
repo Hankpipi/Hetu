@@ -124,8 +124,8 @@ class Attention(Op):
                 self.v_sparse = empty(BL_sparse + (self.attn_weights_v.shape[0], ), ctx=ctx)
                 self.qkv_sparse = empty(BL_sparse + (self.attn_weights_qkv.shape[0], ), ctx=ctx)
             else:
-                self.k_sparse = empty((B, L) + (self.attn_weights_k.shape[0], ), ctx=ctx)
-                self.v_sparse = empty((B, L) + (self.attn_weights_v.shape[0], ), ctx=ctx)
+                self.k_sparse = self.k
+                self.v_sparse = self.v
         self.hidden_states_sparse = empty(BL_sparse + (self.attn_weights_v.shape[0], ), ctx=ctx)
         self.output_sparse = empty(BL_sparse + (self.attn_to_out_weights.shape[0], ), ctx=ctx)
 

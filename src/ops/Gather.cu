@@ -308,7 +308,7 @@ int DLGpuGatherForLinearSimple(const DLArrayHandle input, DLArrayHandle output,
     dim3 threads;
     cudaStream_t* s = nullptr;
     size_t size = 1;
-    int col = output->shape[1];
+    int col = output->shape[2];
     for (index_t i = 0; i < output->ndim; i++) {
         size *= output->shape[i];
     }
