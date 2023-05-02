@@ -1,6 +1,7 @@
 from __future__ import absolute_import
 import numpy as np
 
+from pynvml import *
 import torch
 import hetu as ht
 from .Node import Op
@@ -18,6 +19,7 @@ class Conv2dAddBiasActivateOp(Op):
     profile_dict = {}
 
     workspace_cache = {}
+    workspace_cache_memory = 0
 
     def __init__(self, node_A, node_B, bias, padding=0, stride=1, activation_mode=0,
                 gn_weight=None, gn_bias=None, num_groups=32, eps=0.01, height=None, width=None, config=None, ctx=None):
@@ -166,10 +168,22 @@ class Conv2dAddBiasActivateOp(Op):
                 new_index_arr[0] = new_index_arr[0] * self.stride[0] - self.padding[0]
                 new_index_arr[1] = new_index_arr[1] * self.stride[1] - self.padding[1]
 
+                '''
+                nvmlInit()
+                h = nvmlDeviceGetHandleByIndex(5)
+                info_before = nvmlDeviceGetMemoryInfo(h)
+                '''
+
                 scatter_index = ht.array(np.concatenate((index_arr[0], index_arr[1])), ctx=ctx)
                 scatter_map = ht.empty((out_N * block_sum, out_C, block_h, block_w), ctx=ctx)
                 gather_index = ht.array(np.concatenate((new_index_arr[0], new_index_arr[1])), ctx=ctx)
                 gather_map = ht.empty((in_N * block_sum, in_C, overlapped_block_h, overlapped_block_w), ctx=ctx)
+
+                '''
+                info_after = nvmlDeviceGetMemoryInfo(h)
+                Conv2dAddBiasActivateOp.workspace_cache_memory += info_after.used - info_before.used
+                # print(f'workspace_cache_memory is: {Conv2dAddBiasActivateOp.workspace_cache_memory}')
+                '''
 
                 Conv2dAddBiasActivateOp.workspace_cache[key] = (scatter_index, scatter_map, 
                                     gather_index, gather_map, overlapped_block_h, overlapped_block_w, block_sum)
@@ -206,6 +220,7 @@ class Conv2dAddBiasActivateOp(Op):
         else:
             scatter_index, scatter_map, gather_index, gather_map, overlapped_block_h, \
                 overlapped_block_w, block_sum = value
+
             # A trade-off of peak memory and latency.
             # Store them as self.scatter_map and self.gather_map will get faster but need more memory.
             # scatter_map = ht.empty((out_N * self.block_sum, out_C, self.block_h, self.block_w), ctx=ctx)

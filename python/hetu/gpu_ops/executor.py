@@ -40,6 +40,7 @@ import ctypes
 import os
 from time import time
 import pickle
+from pynvml import *
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -596,8 +597,12 @@ class Executor(object):
                         node.cache_ctx = None
                         if isinstance(node, LinearOp):
                             # No need to synchronize.
-                            continue
                             '''
+                            if len(node.name) < 10 or (node.name[-10:] != 'proj_out_w' and node.name[-10:] != 'proj_in_w'):
+                                continue
+                            '''
+                            if node.name == 'GEGLU' or node.name == 'FeedForward':
+                                continue
                             shape = e.node_to_shape_map[node]
                             if len(shape) != 3 or shape[-2] == 77:
                                 continue
@@ -606,12 +611,11 @@ class Executor(object):
                                     pass
                                 else:
                                     continue
-                            '''
                             if node.latent_scale < node.config.latent_scale_linear:
                                 continue
                         if isinstance(node, Conv2dAddBiasActivateOp):
-                            # Only synchronize on conv1_w, conv2_w and conv_out_w.
-                            if node.op_name[-7:] != 'conv1_w' and node.op_name[-7:] != 'conv2_w' and node.op_name != 'conv_out_w':
+                            # Only synchronize on these conv layers.
+                            if node.op_name[-7:] != 'conv1_w' and node.op_name[-7:] != 'conv2_w' and node.op_name[-16:] != 'shortcut_weights' and node.op_name != 'conv_out_w':
                                 continue
                             if node.latent_scale < node.config.latent_scale_conv:
                                 continue
@@ -1063,8 +1067,22 @@ class SubExecutor(object):
                 if node.cache_ctx == node.ctx:
                     self.node_to_arr_map[node] = node.output_cache[node.round]
 
+        '''
+        nvmlInit()
+        h = nvmlDeviceGetHandleByIndex(5)
+        info = nvmlDeviceGetMemoryInfo(h)
+        print(f'Before compute, memory use is: {info.used}')
+        '''
+
         self.compute(self.computing_nodes,
                      self.node_to_arr_map)
+        
+        '''
+        nvmlInit()
+        h = nvmlDeviceGetHandleByIndex(5)
+        info = nvmlDeviceGetMemoryInfo(h)
+        print(f'After compute, memory use is: {info.used}')
+        '''
 
         for n in self.eval_node_list:
             # every node in eval_node_list should have an event (except dataloader/optimizer...)
@@ -1151,7 +1169,7 @@ class SubExecutor(object):
                     if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)) and n.use_sparse:
                         n.outdeg -= 1
                         # Only do async if the output_cache is on cpu.
-                        if n.cache_ctx == ndarray.cpu():
+                        if not n.config.turn_off_h2d and n.cache_ctx == ndarray.cpu():
                             if n.outdeg == 0 and n.round >= n.limit_1 and n.round < n.limit_2:
                                 cur_stream.sync()
                                 arr_map[n].async_h2d(

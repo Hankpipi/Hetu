@@ -239,7 +239,7 @@ class LinearOp(Op):
                 elif not self.use_sparse and self.cache_ctx == ht.cpu() and self.d2h_stream is not None:
                     self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 
-            if self.name == 'CrossAttn_k' or self.name == 'CrossAttn_v' and self.config.linear_reuse:
+            if not self.config.fuse_cross_attn and self.name == 'CrossAttn_k' or self.name == 'CrossAttn_v' and self.config.linear_reuse:
                 self.reuse = ht.empty(output_val.shape, ctx=ctx)
                 output_val.copyto(self.reuse)
             self.round += 1
