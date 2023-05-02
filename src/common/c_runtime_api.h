@@ -773,7 +773,7 @@ HETUSYS_EXTERN_C {
         const DLArrayHandle input_x, const DLArrayHandle input_f,
         const DLArrayHandle bias, DLArrayHandle output, const int padding_h,
         const int padding_w, const int stride_h, const int stride_w,
-        DLStreamHandle stream_handle);
+        DLStreamHandle stream_handle, const int cache_need_release);
 
     int Cudnn_Conv2dAddBiasSparse(const DLArrayHandle input_x, const DLArrayHandle input_f,
                       const DLArrayHandle bias, DLArrayHandle output,
@@ -783,7 +783,7 @@ HETUSYS_EXTERN_C {
                       int padding_h, int padding_w,
                       const int stride_h, const int stride_w,
                       const int activation_mode, DLArrayHandle scale, DLArrayHandle shift,
-                      DLStreamHandle stream_handle);
+                      DLStreamHandle stream_handle, const int cache_need_release);
 
     // Initializers
     int DLGpuNormalInit(DLArrayHandle arr, const float mean, const float stddev,

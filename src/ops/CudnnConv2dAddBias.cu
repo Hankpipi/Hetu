@@ -1,5 +1,6 @@
 #include "gpu_runtime.h"
 #include "conv2d_utils.h"
+#include <stdio.h>
 
 __global__ void conv2d_add_bias(size_t nthreads,
     const float *input_data,
@@ -103,7 +104,7 @@ int Cudnn_Conv2dAddBias(const DLArrayHandle input_x, const DLArrayHandle input_f
                       const DLArrayHandle bias, DLArrayHandle output,
                       const int padding_h, const int padding_w,
                       const int stride_h, const int stride_w,
-                      DLStreamHandle stream_handle = NULL) {
+                      DLStreamHandle stream_handle = NULL, const int cache_need_release = 0) {
     int dev_id = (input_x->ctx).device_id;
     cudnn_init(dev_id, stream_handle);
     const float *input_data = (const float *)input_x->data;
@@ -112,6 +113,16 @@ int Cudnn_Conv2dAddBias(const DLArrayHandle input_x, const DLArrayHandle input_f
     
     Conv2dArgs conv_args(input_x, input_f, padding_h, padding_w,
                          stride_h, stride_w);
+
+    if (cache_need_release)
+    {
+        for (auto iter = conv2d_cache.begin(); iter != conv2d_cache.end();)
+        {
+            iter->second.reset();
+            iter++;
+        }
+        conv2d_cache.clear();
+    }
 
     if (conv2d_cache.find(conv_args) == conv2d_cache.end()) {
         conv2d_cache[conv_args] = std::unique_ptr<Conv2dDesc>(
@@ -183,7 +194,7 @@ int Cudnn_Conv2dAddBiasSparse(const DLArrayHandle input_x, const DLArrayHandle i
                       int padding_h, int padding_w,
                       const int stride_h, const int stride_w,
                       const int activation_mode = 0, DLArrayHandle scale = NULL, DLArrayHandle shift = NULL,
-                      DLStreamHandle stream_handle = NULL) {
+                      DLStreamHandle stream_handle = NULL, const int cache_need_release = 0) {
 
     int dev_id = (input_x->ctx).device_id;
     cudnn_init(dev_id, stream_handle);
@@ -230,6 +241,16 @@ int Cudnn_Conv2dAddBiasSparse(const DLArrayHandle input_x, const DLArrayHandle i
     padding_w = 0;
     Conv2dArgs conv_args(gather_map, input_f, padding_h, padding_w,
         stride_h, stride_w);
+
+    if (cache_need_release)
+    {
+        for (auto iter = conv2d_cache.begin(); iter != conv2d_cache.end();)
+        {
+            iter->second.reset();
+            iter++;
+        }
+        conv2d_cache.clear();
+    }
 
     if (conv2d_cache.find(conv_args) == conv2d_cache.end()) {
         conv2d_cache[conv_args] = std::unique_ptr<Conv2dDesc>(

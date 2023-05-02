@@ -20,6 +20,7 @@ class Conv2dAddBiasActivateOp(Op):
 
     workspace_cache = {}
     workspace_cache_memory = 0
+    cache_need_release = False
 
     def __init__(self, node_A, node_B, bias, padding=0, stride=1, activation_mode=0,
                 gn_weight=None, gn_bias=None, num_groups=32, eps=0.01, height=None, width=None, config=None, ctx=None):
@@ -216,7 +217,7 @@ class Conv2dAddBiasActivateOp(Op):
                         block_sum=1, activation_mode=self.activation_mode, stream=stream_handle)
                 gn_output = self.gn_output
             CuDNN_conv2d_with_bias(gn_output, input_vals[1], input_vals[2],
-                            output_val, self.padding, self.stride, stream_handle)
+                            output_val, self.padding, self.stride, stream_handle, Conv2dAddBiasActivateOp.cache_need_release)
         else:
             scatter_index, scatter_map, gather_index, gather_map, overlapped_block_h, \
                 overlapped_block_w, block_sum = value
@@ -230,7 +231,7 @@ class Conv2dAddBiasActivateOp(Op):
                 gather_index, scatter_index, block_sum,
                 overlapped_block_h, overlapped_block_w, 
                 gather_map, scatter_map, self.padding, self.stride,
-                self.activation_mode, scale, shift, stream_handle)
+                self.activation_mode, scale, shift, stream_handle, Conv2dAddBiasActivateOp.cache_need_release)
 
         if self.config.profile:  
             torch.cuda.synchronize() 
@@ -247,6 +248,8 @@ class Conv2dAddBiasActivateOp(Op):
                 f_save.close()
 
         self.round += 1
+        if Conv2dAddBiasActivateOp.cache_need_release:
+            Conv2dAddBiasActivateOp.cache_need_release = False
 
 
 
@@ -303,7 +306,7 @@ class Conv2dAddBiasActivateOp(Op):
 
         # Conv
         CuDNN_conv2d_with_bias(gn_output, input_vals[1], input_vals[2],
-                        output_val, self.padding, self.stride, stream_handle)
+                        output_val, self.padding, self.stride, stream_handle, Conv2dAddBiasActivateOp.cache_need_release)
 
         if not self.use_sparse and self.cache_ctx == self.ctx:
             pass
@@ -312,6 +315,8 @@ class Conv2dAddBiasActivateOp(Op):
             self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 
         self.round += 1
+        if Conv2dAddBiasActivateOp.cache_need_release:
+            Conv2dAddBiasActivateOp.cache_need_release = False
 
     def gradient(self, output_grad):
         return [conv2d_gradient_of_data_op(self.inputs[1], output_grad, self.inputs[0], self.padding, self.stride, ctx=self.raw_ctx),
