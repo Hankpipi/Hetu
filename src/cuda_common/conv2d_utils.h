@@ -124,6 +124,14 @@ struct Conv2dDesc {
                 algo = algo_perf[i].algo;
                 break;
             }
+            /*
+            bool flag = try_find_chunk(workspace_size, dev_id, false);
+            if (flag)
+            {
+                algo = algo_perf[i].algo;
+                break;
+            }
+            */
         }
     }
 

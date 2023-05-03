@@ -557,7 +557,7 @@ class Executor(object):
         self.subexecutor[name].clearTimer()
 
     def init_round(self, save_checkpoint, mask=None):
-        Conv2dAddBiasActivateOp.cache_need_release = True
+        Conv2dAddBiasActivateOp.cache_need_release = 1
         if save_checkpoint:
             Conv2dAddBiasActivateOp.workspace_cache.clear()
             LinearOp.index_pool.clear()

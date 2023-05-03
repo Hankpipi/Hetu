@@ -114,13 +114,9 @@ int Cudnn_Conv2dAddBias(const DLArrayHandle input_x, const DLArrayHandle input_f
     Conv2dArgs conv_args(input_x, input_f, padding_h, padding_w,
                          stride_h, stride_w);
 
-    if (cache_need_release)
+    if (cache_need_release == 1)
     {
-        for (auto iter = conv2d_cache.begin(); iter != conv2d_cache.end();)
-        {
-            iter->second.reset();
-            iter++;
-        }
+        clear_chunk();
         conv2d_cache.clear();
     }
 
@@ -142,6 +138,13 @@ int Cudnn_Conv2dAddBias(const DLArrayHandle input_x, const DLArrayHandle input_f
         &beta, desc->out_desc, output_data));
 
     del_chunk(work_data, dev_id);
+    
+    if (cache_need_release == 2)
+    {
+        clear_chunk();
+        conv2d_cache.clear();
+    }
+
     size_t out_N = output->shape[0];
     size_t out_C = output->shape[1];
     size_t out_H = output->shape[2];
@@ -242,13 +245,9 @@ int Cudnn_Conv2dAddBiasSparse(const DLArrayHandle input_x, const DLArrayHandle i
     Conv2dArgs conv_args(gather_map, input_f, padding_h, padding_w,
         stride_h, stride_w);
 
-    if (cache_need_release)
+    if (cache_need_release == 1)
     {
-        for (auto iter = conv2d_cache.begin(); iter != conv2d_cache.end();)
-        {
-            iter->second.reset();
-            iter++;
-        }
+        clear_chunk();
         conv2d_cache.clear();
     }
 
@@ -272,6 +271,13 @@ int Cudnn_Conv2dAddBiasSparse(const DLArrayHandle input_x, const DLArrayHandle i
     
     // Scatter
     del_chunk(work_data, dev_id);
+    
+    if (cache_need_release == 2)
+    {
+        clear_chunk();
+        conv2d_cache.clear();
+    }
+
     int out_N = output->shape[0];
     int out_C = output->shape[1];
     int out_H = output->shape[2];

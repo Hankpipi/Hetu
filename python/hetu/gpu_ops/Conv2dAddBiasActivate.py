@@ -20,7 +20,7 @@ class Conv2dAddBiasActivateOp(Op):
 
     workspace_cache = {}
     workspace_cache_memory = 0
-    cache_need_release = False
+    cache_need_release = 0
 
     def __init__(self, node_A, node_B, bias, padding=0, stride=1, activation_mode=0,
                 gn_weight=None, gn_bias=None, num_groups=32, eps=0.01, height=None, width=None, config=None, ctx=None):
@@ -248,14 +248,16 @@ class Conv2dAddBiasActivateOp(Op):
                 f_save.close()
 
         self.round += 1
-        if Conv2dAddBiasActivateOp.cache_need_release:
-            Conv2dAddBiasActivateOp.cache_need_release = False
+        if Conv2dAddBiasActivateOp.cache_need_release != 0:
+            Conv2dAddBiasActivateOp.cache_need_release = 0
 
 
 
     def compute(self, input_vals, output_val, stream_handle=None):
         ctx = input_vals[0].ctx
 
+        if self.round == 49 and self.op_name == 'conv_out_w':
+            Conv2dAddBiasActivateOp.cache_need_release = 2
         if self.use_sparse and self.round >= self.limit_1 and self.round < self.limit_2:
             self.compute_edit(input_vals, output_val, stream_handle)
             return  
@@ -315,8 +317,8 @@ class Conv2dAddBiasActivateOp(Op):
             self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 
         self.round += 1
-        if Conv2dAddBiasActivateOp.cache_need_release:
-            Conv2dAddBiasActivateOp.cache_need_release = False
+        if Conv2dAddBiasActivateOp.cache_need_release != 0:
+            Conv2dAddBiasActivateOp.cache_need_release = 0
 
     def gradient(self, output_grad):
         return [conv2d_gradient_of_data_op(self.inputs[1], output_grad, self.inputs[0], self.padding, self.stride, ctx=self.raw_ctx),
