@@ -1,4 +1,4 @@
-name: hetu
+name: diffusers_hetu
 channels:
   - conda-forge
   - defaults

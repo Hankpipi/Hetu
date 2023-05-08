@@ -73,6 +73,27 @@ void *find_chunk(size_t _chunk_size, size_t dev_id, bool debug) {
     }
 }
 
+bool try_find_chunk(size_t _chunk_size, size_t dev_id, bool debug) {
+    std::multiset<Chunk>::iterator it;
+    it = free_chunk_set[dev_id].lower_bound(Chunk(NULL, _chunk_size));
+    if ((it == free_chunk_set[dev_id].end())
+        || (it->chunk_size != _chunk_size)) {
+        void *work_data = NULL;
+        cudaSetDevice(dev_id);
+        if (debug)
+            DebugCudaMalloc(cudaMalloc(&work_data, _chunk_size));
+        else {
+            cudaError_t err = cudaMalloc(&work_data, _chunk_size);
+            if (err != cudaSuccess)
+                return false;
+        }
+        cudaFree(&work_data);
+        return true;
+    } else {
+        return true;
+    }
+}
+
 void clear_chunk() {
     init_free_chunk_set.clear();
     free_chunk_set.clear();

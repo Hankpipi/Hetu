@@ -289,3 +289,46 @@ int DLGpuGatherForLinear(const DLArrayHandle input, DLArrayHandle output,
     return 0;
 }
 
+__global__ void gather_for_linear_simple_kernel(const float *input, const float *index,
+                              float *output, size_t size, int col) {
+    size_t ind = blockIdx.x * blockDim.x + threadIdx.x;
+    if (ind >= size)
+        return;
+
+    int nr = ind / col;
+    int nc = ind % col;
+    int ind_new = int(index[nr]) * col + nc;
+    output[ind] = input[ind_new];
+}
+
+int DLGpuGatherForLinearSimple(const DLArrayHandle input, DLArrayHandle output,
+                        DLArrayHandle index, DLStreamHandle stream_handle = NULL) {
+    assert (output->ndim == 3);
+    dim3 blocks;
+    dim3 threads;
+    cudaStream_t* s = nullptr;
+    size_t size = 1;
+    int col = output->shape[2];
+    for (index_t i = 0; i < output->ndim; i++) {
+        size *= output->shape[i];
+    }
+
+    if (size <= 1024) {
+        threads.x = size;
+        blocks.x = 1;
+    } else {
+        threads.x = 1024;
+        blocks.x = (size + 1023) / 1024;
+    }
+    if (stream_handle) {
+        s = (cudaStream_t*)(stream_handle->handle);
+        gather_for_linear_simple_kernel<<<blocks, threads, 0, *s>>>(
+            (const float *)(input->data), (const float *)(index->data), (float *)(output->data),
+            size, col);
+    }
+    else
+        gather_for_linear_simple_kernel<<<blocks, threads>>>(
+            (const float *)(input->data), (const float *)(index->data), (float *)(output->data),
+            size, col);
+    return 0;
+}

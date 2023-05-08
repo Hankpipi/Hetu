@@ -37,3 +37,10 @@ def gather_for_linear(in_arr, index, out_arr, scale, shift, eps, stream=None):
     _LIB.DLGpuGatherForLinear(in_arr.handle, out_arr.handle, index.handle,
                      scale.handle, shift.handle, ctypes.c_float(eps),
                      stream.handle if stream else None)
+    
+def gather_for_linear_simple(in_arr, index, out_arr, stream=None):
+    assert isinstance(in_arr, _nd.NDArray)
+    assert isinstance(index, _nd.NDArray)
+    assert isinstance(out_arr, _nd.NDArray)
+    _LIB.DLGpuGatherForLinearSimple(in_arr.handle, out_arr.handle, index.handle,
+                     stream.handle if stream else None)

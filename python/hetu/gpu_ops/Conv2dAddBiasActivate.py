@@ -1,6 +1,7 @@
 from __future__ import absolute_import
 import numpy as np
 
+from pynvml import *
 import torch
 import hetu as ht
 from .Node import Op
@@ -9,13 +10,22 @@ from .ReduceSum import reduce_sum_op
 from ..gpu_links import CuDNN_conv2d_with_bias, CuDNN_conv2d_with_bias_sparse, group_normalization, \
                         silu, norm_silu
 
+from timeit import default_timer as timer
+import pickle
+
 
 class Conv2dAddBiasActivateOp(Op):
 
+    profile_dict = {}
+
     workspace_cache = {}
+    workspace_cache_memory = 0
+    cache_need_release = 0
 
     def __init__(self, node_A, node_B, bias, padding=0, stride=1, activation_mode=0,
                 gn_weight=None, gn_bias=None, num_groups=32, eps=0.01, height=None, width=None, config=None, ctx=None):
+        self.op_name = node_B.name
+        self.cache_ctx = None
         self.mask = None
         self.limit_1 = None
         self.limit_2 = None
@@ -34,12 +44,10 @@ class Conv2dAddBiasActivateOp(Op):
         self.stride = stride
 
         # Conv
-        if height is None or height <= 24:
-            self.block_division_h = 12
-            self.block_division_w = 12
-        else:
-            self.block_division_h = height // 2
-            self.block_division_w = width // 2
+        self.block_division_h = height // 2
+        self.block_division_w = width // 2
+        # self.block_division_h = 12
+        # self.block_division_w = 12
         self.latent_scale = height * width
 
         self.round = 0
@@ -50,7 +58,7 @@ class Conv2dAddBiasActivateOp(Op):
         self.scale = None
         self.shift = None
         self.output_cache = []
-        self.latent_scale = 0
+        self.should_init_cache = True
 
         # Activation
         # 0 stands for Identity function.
@@ -112,6 +120,7 @@ class Conv2dAddBiasActivateOp(Op):
 
 
     def compute_edit(self, input_vals, output_val, stream_handle=None):
+        # print("Sparse Conv:", self.fuse_gn, "input", input_vals[0].shape, "kernel", input_vals[1].shape, "output", output_val.shape)
         ctx = input_vals[0].ctx
         in_N, in_C, in_H, in_W = input_vals[0].shape
         filter_out_C, filter_in_C, filter_H, filter_W = input_vals[1].shape
@@ -140,10 +149,7 @@ class Conv2dAddBiasActivateOp(Op):
             # Assume the original latent's size is no less than 96 * 96.
             block_h = out_H // self.block_division_h
             block_w = out_W // self.block_division_w
-            mask = torch.nn.functional.interpolate(
-                mask.repeat(1, 1, 1, 1), size=(out_H, out_W)
-            )
-            block_mask = torch.nn.MaxPool2d(kernel_size=(block_h, block_w))(mask.float()) 
+            block_mask = torch.nn.MaxPool2d(kernel_size=(mask.shape[-2] // self.block_division_h, mask.shape[-1] // self.block_division_w))(mask.float().repeat(1, 1, 1, 1)) 
             assert (block_mask.shape[-2] == self.block_division_h and block_mask.shape[-1] == self.block_division_w)
             block_mask = (block_mask > 0.5)
             block_mask = block_mask.numpy()[0][0]
@@ -158,29 +164,52 @@ class Conv2dAddBiasActivateOp(Op):
             overlapped_block_w = (block_w - 1) * self.stride[1] + filter_W
             flops_new = (block_sum * out_C * block_h * block_w) * (filter_in_C * filter_H * filter_W)
             # print(f'origin flops={flops_input}, new flops={flops_new}, rate={flops_new / flops_input}')
-            if self.latent_scale >= self.config.latent_scale:
+            if self.latent_scale >= self.config.latent_scale_conv:
                 new_index_arr = index_arr.copy()
                 new_index_arr[0] = new_index_arr[0] * self.stride[0] - self.padding[0]
                 new_index_arr[1] = new_index_arr[1] * self.stride[1] - self.padding[1]
+
+                '''
+                nvmlInit()
+                h = nvmlDeviceGetHandleByIndex(5)
+                info_before = nvmlDeviceGetMemoryInfo(h)
+                '''
 
                 scatter_index = ht.array(np.concatenate((index_arr[0], index_arr[1])), ctx=ctx)
                 scatter_map = ht.empty((out_N * block_sum, out_C, block_h, block_w), ctx=ctx)
                 gather_index = ht.array(np.concatenate((new_index_arr[0], new_index_arr[1])), ctx=ctx)
                 gather_map = ht.empty((in_N * block_sum, in_C, overlapped_block_h, overlapped_block_w), ctx=ctx)
 
+                '''
+                info_after = nvmlDeviceGetMemoryInfo(h)
+                Conv2dAddBiasActivateOp.workspace_cache_memory += info_after.used - info_before.used
+                # print(f'workspace_cache_memory is: {Conv2dAddBiasActivateOp.workspace_cache_memory}')
+                '''
+
                 Conv2dAddBiasActivateOp.workspace_cache[key] = (scatter_index, scatter_map, 
                                     gather_index, gather_map, overlapped_block_h, overlapped_block_w, block_sum)
             else:
                 Conv2dAddBiasActivateOp.workspace_cache[key] = 'origin'
+        
+        value = Conv2dAddBiasActivateOp.workspace_cache[key]
 
-        self.event.sync()
+        if self.config.profile:
+            torch.cuda.synchronize() 
+            time_start = timer()
+
+        if not self.config.turn_off_h2d:
+            if self.cache_ctx == self.ctx:
+                pass
+                # self.output_cache[self.round].copyto(output_val)
+            elif self.cache_ctx == ht.cpu():
+                self.event.sync()
+
         # Also need to load the scale & shift of the GN layer.
         scale, shift = None, None
         if self.fuse_gn:
             scale = self.gn_scale_cache[self.round]
             shift = self.gn_shift_cache[self.round]
         
-        value = Conv2dAddBiasActivateOp.workspace_cache[key]
         if value == 'origin':
             gn_output = input_vals[0]
             if self.fuse_gn:
@@ -188,10 +217,11 @@ class Conv2dAddBiasActivateOp(Op):
                         block_sum=1, activation_mode=self.activation_mode, stream=stream_handle)
                 gn_output = self.gn_output
             CuDNN_conv2d_with_bias(gn_output, input_vals[1], input_vals[2],
-                            output_val, self.padding, self.stride, stream_handle)
+                            output_val, self.padding, self.stride, stream_handle, Conv2dAddBiasActivateOp.cache_need_release)
         else:
             scatter_index, scatter_map, gather_index, gather_map, overlapped_block_h, \
                 overlapped_block_w, block_sum = value
+
             # A trade-off of peak memory and latency.
             # Store them as self.scatter_map and self.gather_map will get faster but need more memory.
             # scatter_map = ht.empty((out_N * self.block_sum, out_C, self.block_h, self.block_w), ctx=ctx)
@@ -201,13 +231,33 @@ class Conv2dAddBiasActivateOp(Op):
                 gather_index, scatter_index, block_sum,
                 overlapped_block_h, overlapped_block_w, 
                 gather_map, scatter_map, self.padding, self.stride,
-                self.activation_mode, scale, shift, stream_handle)
+                self.activation_mode, scale, shift, stream_handle, Conv2dAddBiasActivateOp.cache_need_release)
+
+        if self.config.profile:  
+            torch.cuda.synchronize() 
+            time_end = timer()
+            time_elapse = time_end - time_start
+            time_key = (self.op_name, self.latent_scale)
+            if time_key not in Conv2dAddBiasActivateOp.profile_dict:
+                Conv2dAddBiasActivateOp.profile_dict[time_key] = time_elapse
+            else:
+                Conv2dAddBiasActivateOp.profile_dict[time_key] += time_elapse
+            if self.round == self.limit_2 - 1:
+                f_save = open('profile_conv.pkl', 'wb')
+                pickle.dump(Conv2dAddBiasActivateOp.profile_dict, f_save)
+                f_save.close()
 
         self.round += 1
+        if Conv2dAddBiasActivateOp.cache_need_release != 0:
+            Conv2dAddBiasActivateOp.cache_need_release = 0
+
+
 
     def compute(self, input_vals, output_val, stream_handle=None):
         ctx = input_vals[0].ctx
 
+        if self.round == 49 and self.op_name == 'conv_out_w':
+            Conv2dAddBiasActivateOp.cache_need_release = 2
         if self.use_sparse and self.round >= self.limit_1 and self.round < self.limit_2:
             self.compute_edit(input_vals, output_val, stream_handle)
             return  
@@ -258,12 +308,17 @@ class Conv2dAddBiasActivateOp(Op):
 
         # Conv
         CuDNN_conv2d_with_bias(gn_output, input_vals[1], input_vals[2],
-                        output_val, self.padding, self.stride, stream_handle)
+                        output_val, self.padding, self.stride, stream_handle, Conv2dAddBiasActivateOp.cache_need_release)
 
-        if not self.use_sparse and self.d2h_stream is not None:
+        if not self.use_sparse and self.cache_ctx == self.ctx:
+            pass
+            # output_val.copyto(self.output_cache[self.round])
+        elif not self.use_sparse and self.cache_ctx == ht.cpu() and self.d2h_stream is not None:
             self.output_cache[self.round].async_d2h(output_val, stream_handle=self.d2h_stream)
 
         self.round += 1
+        if Conv2dAddBiasActivateOp.cache_need_release != 0:
+            Conv2dAddBiasActivateOp.cache_need_release = 0
 
     def gradient(self, output_grad):
         return [conv2d_gradient_of_data_op(self.inputs[1], output_grad, self.inputs[0], self.padding, self.stride, ctx=self.raw_ctx),

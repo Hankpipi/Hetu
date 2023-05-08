@@ -158,6 +158,8 @@ HETUSYS_EXTERN_C {
     int DLGpuGatherForLinear(const DLArrayHandle input, DLArrayHandle output,
                         DLArrayHandle index, DLArrayHandle scale, DLArrayHandle shift,
                         const float eps, DLStreamHandle stream_handle);
+    int DLGpuGatherForLinearSimple(const DLArrayHandle input, DLArrayHandle output,
+                        DLArrayHandle index, DLStreamHandle stream_handle);
     int DLGpuMaskedFill(const DLArrayHandle input, const DLArrayHandle mask,
                         float val, DLArrayHandle output,
                         DLStreamHandle stream_handle);
@@ -757,7 +759,8 @@ HETUSYS_EXTERN_C {
                     DLArrayHandle matC, DLArrayHandle index,
                     DLArrayHandle matA_sparse, DLArrayHandle matC_sparse,
                     DLArrayHandle scale, DLArrayHandle shift,
-                    const float eps, const int activation_mode,
+                    const float eps, DLArrayHandle add,
+                    const int activation_mode,
                     DLStreamHandle stream_handle);
 
     int DLGpuLinearQKV(const DLArrayHandle matA, bool transposeA,
@@ -770,7 +773,7 @@ HETUSYS_EXTERN_C {
         const DLArrayHandle input_x, const DLArrayHandle input_f,
         const DLArrayHandle bias, DLArrayHandle output, const int padding_h,
         const int padding_w, const int stride_h, const int stride_w,
-        DLStreamHandle stream_handle);
+        DLStreamHandle stream_handle, const int cache_need_release);
 
     int Cudnn_Conv2dAddBiasSparse(const DLArrayHandle input_x, const DLArrayHandle input_f,
                       const DLArrayHandle bias, DLArrayHandle output,
@@ -780,7 +783,7 @@ HETUSYS_EXTERN_C {
                       int padding_h, int padding_w,
                       const int stride_h, const int stride_w,
                       const int activation_mode, DLArrayHandle scale, DLArrayHandle shift,
-                      DLStreamHandle stream_handle);
+                      DLStreamHandle stream_handle, const int cache_need_release);
 
     // Initializers
     int DLGpuNormalInit(DLArrayHandle arr, const float mean, const float stddev,
@@ -1130,7 +1133,7 @@ HETUSYS_EXTERN_C {
 
     int DLGpuScatterForLinear(const DLArrayHandle src, DLArrayHandle target, 
                       DLArrayHandle index,
-                      const int activation_mode,
+                      const int activation_mode, const float merge_rate,
                       DLStreamHandle stream_handle);
 
     int DLGpuScatterAddForLinear(const DLArrayHandle src, const DLArrayHandle add, DLArrayHandle target, 

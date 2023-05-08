@@ -1,3 +1,4 @@
+/*
 #include "gpu_runtime.h"
 #include <cub/cub.cuh>
 
@@ -83,3 +84,4 @@ int DLGpuArgsort(const DLArrayHandle input, DLArrayHandle output,
 
     return 0;
 }
+*/

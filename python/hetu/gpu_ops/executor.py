@@ -40,6 +40,7 @@ import ctypes
 import os
 from time import time
 import pickle
+from pynvml import *
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -556,12 +557,23 @@ class Executor(object):
         self.subexecutor[name].clearTimer()
 
     def init_round(self, save_checkpoint, mask=None):
+        Conv2dAddBiasActivateOp.cache_need_release = 1
+        if save_checkpoint:
+            Conv2dAddBiasActivateOp.workspace_cache.clear()
+            LinearOp.index_pool.clear()
+            LinearOp.input_pool.clear()
+            LinearOp.output_pool.clear()
         for e in self.subexecutor.values():
             for node in e.computing_nodes:
                 if isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
+                    if isinstance(node, Conv2dAddBiasActivateOp) and save_checkpoint:
+                        node.gn_scale_cache = []
+                        node.gn_shift_cache = []
+                    if isinstance(node, Attention):
+                        node.built = False
                     node.use_sparse = False
                     node.limit_1 = 10 if mask is None else 0
-                    node.limit_2 = 50 if mask is None else 45   
+                    node.limit_2 = 50 if mask is None else 40  
                     if isinstance(node, LinearOp) and (node.name == 'time_embed_1' or node.name == 'time_embed_2' or node.name == 'temb_proj'):
                         node.limit_1 = 0 
                         node.limit_2 = 50        
@@ -573,6 +585,59 @@ class Executor(object):
                     if not save_checkpoint and node.round == 50:
                         node.use_sparse = True     
                     node.round = 0
+
+
+    def init_cache(self):
+        for e in self.subexecutor.values():
+            for node in e.computing_nodes:
+                if isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
+                    # Init the node.output_cache (only once).
+                    if node.should_init_cache:
+                        node.should_init_cache = False
+                        # Don't need any output_cache by default.
+                        node.cache_ctx = None
+                        if isinstance(node, LinearOp):
+                            # No need to synchronize.
+                            '''
+                            if len(node.name) < 10 or (node.name[-10:] != 'proj_out_w' and node.name[-10:] != 'proj_in_w'):
+                                continue
+                            '''
+                            if node.name == 'GEGLU' or node.name == 'FeedForward':
+                                continue
+                            shape = e.node_to_shape_map[node]
+                            if len(shape) != 3 or shape[-2] == 77:
+                                continue
+                            if node.name == 'time_embed_1' or node.name == 'time_embed_2' or node.name == 'temb_proj':
+                                if node.config.linear_reuse:
+                                    pass
+                                else:
+                                    continue
+                            if node.latent_scale < node.config.latent_scale_linear:
+                                continue
+                        if isinstance(node, Conv2dAddBiasActivateOp):
+                            # Only synchronize on these conv layers.
+                            if node.op_name[-7:] != 'conv1_w' and node.op_name[-7:] != 'conv2_w' and node.op_name[-16:] != 'shortcut_weights' and node.op_name != 'conv_out_w':
+                                continue
+                            if node.latent_scale < node.config.latent_scale_conv:
+                                continue
+                        if isinstance(node, Attention):
+                            if node.config.fuse_attn1_attn2_ff:
+                                continue
+                            elif node.latent_scale < node.config.latent_scale_attn:
+                                continue
+                        # May implement more flexible strategies here. Some cpu and some gpu.
+                        # Note that we have to put conv_out_w conv to gpu.
+                        if isinstance(node, Conv2dAddBiasActivateOp) and node.op_name == 'conv_out_w':
+                            print(f'{node.op_name} output_cache is put on gpu.')
+                            node.cache_ctx = node.ctx
+                        # For example, we could also put the GEGLU linear to gpu.
+                        elif isinstance(node, LinearOp) and node.op_name[:7] == 'GEGLU_6':
+                            print(f'{node.op_name} output_cache is put on gpu.')
+                            node.cache_ctx = node.ctx
+                        else:
+                            node.cache_ctx = ndarray.cpu()
+                        for i in range(50):
+                            node.output_cache.append(ndarray.empty(node.output_shape, node.cache_ctx))
 
 
     def __del__(self) -> None:
@@ -998,8 +1063,27 @@ class SubExecutor(object):
             self.infer_shape(feed_shapes)
             self.memory_plan()
 
+        for node in self.computing_nodes:
+            if isinstance(node, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
+                if node.cache_ctx == node.ctx:
+                    self.node_to_arr_map[node] = node.output_cache[node.round]
+
+        '''
+        nvmlInit()
+        h = nvmlDeviceGetHandleByIndex(5)
+        info = nvmlDeviceGetMemoryInfo(h)
+        print(f'Before compute, memory use is: {info.used}')
+        '''
+
         self.compute(self.computing_nodes,
                      self.node_to_arr_map)
+        
+        '''
+        nvmlInit()
+        h = nvmlDeviceGetHandleByIndex(5)
+        info = nvmlDeviceGetMemoryInfo(h)
+        print(f'After compute, memory use is: {info.used}')
+        '''
 
         for n in self.eval_node_list:
             # every node in eval_node_list should have an event (except dataloader/optimizer...)
@@ -1046,10 +1130,6 @@ class SubExecutor(object):
             for n in node.inputs:
                 if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
                     n.outdeg += 1
-                    if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp)):
-                        if len(n.output_cache) == 0:
-                            for i in range(50):
-                                n.output_cache.append(ndarray.empty(n.output_shape, ctx=ndarray.cpu()))
 
         for node in computing_nodes:
             if node.on_cpu and isinstance(arr_map[node], ndarray.NDArray):
@@ -1088,23 +1168,13 @@ class SubExecutor(object):
 
                 for n in node.inputs:
                     if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)) and n.use_sparse:
-                        if isinstance(n, LinearOp):
-                            if n.name == 'time_embed_1' or n.name == 'time_embed_2' or n.name == 'temb_proj':
-                                if n.config.linear_reuse:
-                                    pass
-                                else:
-                                    continue
-                            elif n.latent_scale < n.config.latent_scale:
-                                continue
-                        if isinstance(n, Conv2dAddBiasActivateOp) and n.latent_scale < n.config.latent_scale:
-                            continue
-                        if isinstance(n, Attention):
-                            continue
                         n.outdeg -= 1
-                        if n.outdeg == 0 and n.round >= n.limit_1 and n.round < n.limit_2:
-                            cur_stream.sync()
-                            arr_map[n].async_h2d(
-                                n.output_cache[n.round], self.h2d_stream, n.event)
+                        # Only do async if the output_cache is on cpu.
+                        if not n.config.turn_off_h2d and n.cache_ctx == ndarray.cpu():
+                            if n.outdeg == 0 and n.round >= n.limit_1 and n.round < n.limit_2:
+                                cur_stream.sync()
+                                arr_map[n].async_h2d(
+                                    n.output_cache[n.round], self.h2d_stream, n.event)
 
         if len(grouping_nodes) > 0:
             make_group()

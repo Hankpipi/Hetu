@@ -1,5 +1,6 @@
 #include "gpu_runtime.h"
 #include "conv2d_utils.h"
+#include <stdio.h>
 
 __global__ void conv2d_add_bias(size_t nthreads,
     const float *input_data,
@@ -103,7 +104,7 @@ int Cudnn_Conv2dAddBias(const DLArrayHandle input_x, const DLArrayHandle input_f
                       const DLArrayHandle bias, DLArrayHandle output,
                       const int padding_h, const int padding_w,
                       const int stride_h, const int stride_w,
-                      DLStreamHandle stream_handle = NULL) {
+                      DLStreamHandle stream_handle = NULL, const int cache_need_release = 0) {
     int dev_id = (input_x->ctx).device_id;
     cudnn_init(dev_id, stream_handle);
     const float *input_data = (const float *)input_x->data;
@@ -112,6 +113,12 @@ int Cudnn_Conv2dAddBias(const DLArrayHandle input_x, const DLArrayHandle input_f
     
     Conv2dArgs conv_args(input_x, input_f, padding_h, padding_w,
                          stride_h, stride_w);
+
+    if (cache_need_release == 1)
+    {
+        clear_chunk();
+        conv2d_cache.clear();
+    }
 
     if (conv2d_cache.find(conv_args) == conv2d_cache.end()) {
         conv2d_cache[conv_args] = std::unique_ptr<Conv2dDesc>(
@@ -131,6 +138,13 @@ int Cudnn_Conv2dAddBias(const DLArrayHandle input_x, const DLArrayHandle input_f
         &beta, desc->out_desc, output_data));
 
     del_chunk(work_data, dev_id);
+    
+    if (cache_need_release == 2)
+    {
+        clear_chunk();
+        conv2d_cache.clear();
+    }
+
     size_t out_N = output->shape[0];
     size_t out_C = output->shape[1];
     size_t out_H = output->shape[2];
@@ -183,7 +197,7 @@ int Cudnn_Conv2dAddBiasSparse(const DLArrayHandle input_x, const DLArrayHandle i
                       int padding_h, int padding_w,
                       const int stride_h, const int stride_w,
                       const int activation_mode = 0, DLArrayHandle scale = NULL, DLArrayHandle shift = NULL,
-                      DLStreamHandle stream_handle = NULL) {
+                      DLStreamHandle stream_handle = NULL, const int cache_need_release = 0) {
 
     int dev_id = (input_x->ctx).device_id;
     cudnn_init(dev_id, stream_handle);
@@ -231,6 +245,12 @@ int Cudnn_Conv2dAddBiasSparse(const DLArrayHandle input_x, const DLArrayHandle i
     Conv2dArgs conv_args(gather_map, input_f, padding_h, padding_w,
         stride_h, stride_w);
 
+    if (cache_need_release == 1)
+    {
+        clear_chunk();
+        conv2d_cache.clear();
+    }
+
     if (conv2d_cache.find(conv_args) == conv2d_cache.end()) {
         conv2d_cache[conv_args] = std::unique_ptr<Conv2dDesc>(
             new Conv2dDesc(gather_map, input_f, scatter_map,
@@ -251,6 +271,13 @@ int Cudnn_Conv2dAddBiasSparse(const DLArrayHandle input_x, const DLArrayHandle i
     
     // Scatter
     del_chunk(work_data, dev_id);
+    
+    if (cache_need_release == 2)
+    {
+        clear_chunk();
+        conv2d_cache.clear();
+    }
+
     int out_N = output->shape[0];
     int out_C = output->shape[1];
     int out_H = output->shape[2];
