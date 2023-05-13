@@ -1131,6 +1131,8 @@ class SubExecutor(object):
                 if isinstance(n, (LinearOp, Conv2dAddBiasActivateOp, ResNet, Attention)):
                     n.outdeg += 1
 
+        total = 0
+        totalsize = 0
         for node in computing_nodes:
             if node.on_cpu and isinstance(arr_map[node], ndarray.NDArray):
                 if DNNL_LIB['cpu_ArraySet'] and not isinstance(node, DataD2HOp):
@@ -1172,10 +1174,19 @@ class SubExecutor(object):
                         # Only do async if the output_cache is on cpu.
                         if not n.config.turn_off_h2d and n.cache_ctx == ndarray.cpu():
                             if n.outdeg == 0 and n.round >= n.limit_1 and n.round < n.limit_2:
+                                size = 1
+                                for s in arr_map[n].shape:
+                                    size *= s
+                                totalsize += (size * 4) / 10**6
                                 cur_stream.sync()
+                                self.h2d_stream.sync()
+                                start = time()
                                 arr_map[n].async_h2d(
                                     n.output_cache[n.round], self.h2d_stream, n.event)
+                                self.h2d_stream.sync()
+                                total += time() - start
 
+        print(f'cache size: {totalsize}, transfer time: {total}')
         if len(grouping_nodes) > 0:
             make_group()
 
