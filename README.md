@@ -33,7 +33,16 @@ We welcome everyone interested in machine learning or graph computing to contrib
 
 2. Prepare the environment. We use Anaconda to manage packages. The following command create the conda environment to be used:`conda env create -f environment.yml`. Please prepare Cuda toolkit and CuDNN in advance.
 
-3. We use CMake to compile Hetu. Please copy the example configuration for compilation by `cp cmake/config.example.cmake cmake/config.cmake`. Users can modify the configuration file to enable/disable the compilation of each module. For advanced users (who not using the provided conda environment), the prerequisites for different modules in Hetu is listed in appendix.
+3. Install `xformers` and `cutlass`. To be specific, we have already prepared `xformers.tar` in Hetu directory, and you can easily follow these commands to install them.
+
+```shell
+tar -xvf xformers.tar
+mv xformers /usr/include/
+cd /usr/include
+git clone https://github.com/NVIDIA/cutlass.git
+```
+
+4. We use CMake to compile Hetu. Please copy the example configuration for compilation by `cp cmake/config.example.cmake cmake/config.cmake`. Users can modify the configuration file to enable/disable the compilation of each module. For advanced users (who not using the provided conda environment), the prerequisites for different modules in Hetu is listed in appendix.
 
 ```bash
 # modify paths and configurations in cmake/config.cmake
@@ -56,7 +65,7 @@ make geometric -j 8
 make hetu_cache -j 8
 ```
 
-4. Prepare environment for running. Edit the hetu.exp file and set the environment path for python and the path for executable mpirun if necessary (for advanced users not using the provided conda environment). Then execute the command `source hetu.exp` .
+5. Prepare environment for running. Edit the hetu.exp file and set the environment path for python and the path for executable mpirun if necessary (for advanced users not using the provided conda environment). Then execute the command `source hetu.exp` .
 
 
 
